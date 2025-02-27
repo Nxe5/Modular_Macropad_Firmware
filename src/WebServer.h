@@ -19,6 +19,7 @@ private:
 
 public:
     WebServer();
+    ~WebServer(); // Added destructor
     void begin();
 };
 

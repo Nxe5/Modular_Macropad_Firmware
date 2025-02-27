@@ -1,0 +1,133 @@
+  {
+    "components": [
+    {
+      "id": "display-1",
+      "type": "display",
+      "size": { "rows": 2, "columns": 3 },
+      "start_location": { "row": 0, "column": 0 }
+    },
+    {
+      "id": "button-1",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 0, "column": 3 }
+
+    },
+    {
+      "id": "button-2",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 1, "column": 3 }
+
+    },
+    {
+      "id": "button-3",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 1, "column": 4 }
+    },
+    {
+      "id": "button-4",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 2, "column": 0 }
+    },
+    {
+      "id": "button-5",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 2, "column": 1 }
+    },
+    {
+      "id": "button-6",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 2, "column": 2 }
+    },
+    {
+      "id": "button-7",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 2, "column": 3 }
+    },
+    {
+      "id": "button-8",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 2, "column": 4 }
+    },
+    {
+      "id": "button-9",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 3, "column": 0 }
+    },
+    {
+      "id": "button-10",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 3, "column": 1 }
+    },
+    {
+      "id": "button-11",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 3, "column": 2 }
+    },
+    {
+      "id": "button-12",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 3, "column": 3 }
+    },
+    {
+      "id": "button-13",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 3, "column": 4 }
+    },
+    {
+      "id": "button-14",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 4, "column": 0 }
+    },
+    {
+      "id": "button-15",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 4, "column": 1 }
+    },
+    {
+      "id": "button-16",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 4, "column": 2 }
+    },
+    {
+      "id": "button-17",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 4, "column": 3 }
+    },
+    {
+      "id": "button-18",
+      "type": "button",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 4, "column": 4 }
+    },
+    {
+      "id": "encoder-1",
+      "type": "encoder",
+      "size": { "rows": 1, "columns": 1 },
+      "start_location": { "row": 0, "column": 4 },
+      "with_button": true,
+      "actions":
+      {
+        "clockwise": "layer-1",
+        "counterclockwise": "layer-2",
+        "buttonPress": "layer-3"
+      }
+    }
+  ]
+}

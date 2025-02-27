@@ -1,14 +1,14 @@
-
 // WebServer.cpp
 #include "WebServer.h"
 
 WebServer::WebServer() : server(80) {}
 
+WebServer::~WebServer() {
+    // Cleanup code if needed
+}
+
 void WebServer::begin() {
-    if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS Mount Failed");
-        return;
-    }
+    // Note: SPIFFS is initialized in main.cpp, no need to initialize again
 
     // Load default config if none exists
     if (!SPIFFS.exists(CONFIG_FILE)) {
@@ -41,6 +41,8 @@ void WebServer::begin() {
     });
 
     server.begin();
+    
+    Serial.println("Web server started");
 }
 
 void WebServer::handleGetConfig(AsyncWebServerRequest* request) {
@@ -72,7 +74,7 @@ void WebServer::handleSetConfig(AsyncWebServerRequest* request, uint8_t* data, s
     file.close();
 
     // Trigger config reload
-    loadConfiguration(); // From your existing code
+    // loadConfiguration(); // From your existing code
 
     request->send(200, "application/json", "{\"status\": \"Configuration updated\"}");
 }

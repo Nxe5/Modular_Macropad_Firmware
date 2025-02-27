@@ -16,41 +16,6 @@ struct ModuleConfig {
   String additionalSettings; // Additional settings (e.g., backlight)
 };
 
-void setup() {
-  Serial.begin(115200);
-
-  // Initialize SPIFFS
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS mount failed");
-    return;
-  }
-
-  // Retrieve the MAC address of the ESP32
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);  // Get MAC address
-  String macAddress = String(mac[0], HEX) + ":" + String(mac[1], HEX) + ":" +
-                      String(mac[2], HEX) + ":" + String(mac[3], HEX) + ":" +
-                      String(mac[4], HEX) + ":" + String(mac[5], HEX);
-
-  // Example of storing the type (button, rotary encoder, etc.)
-  String moduleType = "button";  // You can set this dynamically, e.g., from user input
-
-  // Example configuration for the module
-  ModuleConfig moduleConfig;
-  moduleConfig.id = macAddress;  // Use MAC address as unique ID
-  moduleConfig.type = moduleType; // Set module type dynamically
-  moduleConfig.additionalSettings = "No additional settings";
-
-  // Assigning keys (example for a 5x5 grid)
-  for (int i = 0; i < 25; i++) {
-    moduleConfig.keys[i].key = "Button " + String(i + 1);  // Placeholder key names
-    moduleConfig.keys[i].action = "None";  // Placeholder action
-  }
-
-  // Export the configuration
-  exportConfig(moduleConfig);
-}
-
 // Function to export configuration to a JSON file
 void exportConfig(ModuleConfig moduleConfig) {
   // Open a file to store the configuration
@@ -85,6 +50,31 @@ void exportConfig(ModuleConfig moduleConfig) {
   Serial.println("Configuration saved to module_config.json");
 }
 
-void loop() {
-  // Main code loop
+void initializeModuleConfig() {
+  // Note: SPIFFS is initialized in main.cpp, no need to initialize again
+  
+  // Retrieve the MAC address of the ESP32
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);  // Get MAC address
+  String macAddress = String(mac[0], HEX) + ":" + String(mac[1], HEX) + ":" +
+                    String(mac[2], HEX) + ":" + String(mac[3], HEX) + ":" +
+                    String(mac[4], HEX) + ":" + String(mac[5], HEX);
+
+  // Example of storing the type (button, rotary encoder, etc.)
+  String moduleType = "button";  // You can set this dynamically, e.g., from user input
+
+  // Example configuration for the module
+  ModuleConfig moduleConfig;
+  moduleConfig.id = macAddress;  // Use MAC address as unique ID
+  moduleConfig.type = moduleType; // Set module type dynamically
+  moduleConfig.additionalSettings = "No additional settings";
+
+  // Assigning keys (example for a 5x5 grid)
+  for (int i = 0; i < 25; i++) {
+    moduleConfig.keys[i].key = "Button " + String(i + 1);  // Placeholder key names
+    moduleConfig.keys[i].action = "None";  // Placeholder action
+  }
+
+  // Export the configuration
+  exportConfig(moduleConfig);
 }
