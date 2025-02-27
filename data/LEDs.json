@@ -1,10 +1,12 @@
-{  "leds": [
+{  
+    "leds": {
+    "layer-name": "default-led-layer",
+    "active": true,
+    "config": [
     {
     "id": "led-1",
     "stream_address": 0,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 0, "column": 3 }
     },
@@ -12,8 +14,6 @@
     "id": "led-2",
     "stream_address": 1,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 1, "column": 3 }
     },
@@ -21,8 +21,6 @@
     "id": "led-3",
     "stream_address": 2,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 1, "column": 4 }
     },
@@ -30,8 +28,6 @@
     "id": "led-4",
     "stream_address": 3,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 2, "column": 0 }
     },
@@ -39,8 +35,6 @@
     "id": "led-5",
     "stream_address": 4,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 2, "column": 1 }
     },
@@ -48,8 +42,6 @@
     "id": "led-6",
     "stream_address": 5,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 2, "column": 2 }
     },
@@ -57,8 +49,6 @@
     "id": "led-7",
     "stream_address": 6,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 2, "column": 3 }
     },
@@ -66,8 +56,6 @@
     "id": "led-8",
     "stream_address": 7,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 2, "column": 4 }
     },
@@ -75,8 +63,6 @@
     "id": "led-9",
     "stream_address": 8,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 3, "column": 0 }
     },
@@ -84,8 +70,6 @@
     "id": "led-10",
     "stream_address": 9,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 3, "column": 1 }
     },
@@ -93,8 +77,6 @@
     "id": "led-11",
     "stream_address": 10,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 3, "column": 2 }
     },
@@ -102,8 +84,6 @@
     "id": "led-12",
     "stream_address": 11,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 3, "column": 3 }
     },
@@ -111,8 +91,6 @@
     "id": "led-13",
     "stream_address": 12,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 3, "column": 4 }
     },
@@ -120,8 +98,6 @@
     "id": "led-14",
     "stream_address": 13,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 4, "column": 0 }
     },
@@ -129,8 +105,6 @@
     "id": "led-15",
     "stream_address": 14,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 4, "column": 1 }
     },
@@ -138,8 +112,6 @@
     "id": "led-16",
     "stream_address": 15,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 4, "column": 2 }
     },
@@ -147,8 +119,6 @@
     "id": "led-17",
     "stream_address": 16,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 4, "column": 3 }
     },
@@ -156,10 +126,9 @@
     "id": "led-18",
     "stream_address": 17,
     "type": "sk6812",
-    "color": "0x000000",
-    "brightness": 255,
     "size": { "rows": 1, "columns": 1 },
     "start_location": { "row": 4, "column": 4 }
     }
   ]
+}
 }

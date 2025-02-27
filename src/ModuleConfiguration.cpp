@@ -60,14 +60,9 @@ void initializeModuleConfig() {
                     String(mac[2], HEX) + ":" + String(mac[3], HEX) + ":" +
                     String(mac[4], HEX) + ":" + String(mac[5], HEX);
 
-  // Example of storing the type (button, rotary encoder, etc.)
-  String moduleType = "button";  // You can set this dynamically, e.g., from user input
-
   // Example configuration for the module
   ModuleConfig moduleConfig;
   moduleConfig.id = macAddress;  // Use MAC address as unique ID
-  moduleConfig.type = moduleType; // Set module type dynamically
-  moduleConfig.additionalSettings = "No additional settings";
 
   // Assigning keys (example for a 5x5 grid)
   for (int i = 0; i < 25; i++) {

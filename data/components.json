@@ -1,4 +1,4 @@
-  {
+{
     "components": [
     {
       "id": "display-1",
@@ -121,13 +121,7 @@
       "type": "encoder",
       "size": { "rows": 1, "columns": 1 },
       "start_location": { "row": 0, "column": 4 },
-      "with_button": true,
-      "actions":
-      {
-        "clockwise": "layer-1",
-        "counterclockwise": "layer-2",
-        "buttonPress": "layer-3"
-      }
+      "with_button": true
     }
   ]
 }
