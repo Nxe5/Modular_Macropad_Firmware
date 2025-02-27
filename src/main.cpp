@@ -1,3 +1,7 @@
+#include "FS.h"
+#include "SPIFFS.h"
+#include "ArduinoJson.h"
+
 #include "ModuleConfiguration.h"
 #include "ModuleInfo.h"
 
@@ -7,69 +11,58 @@
 #include "LEDHandler.h"
 #include "SerialHandler.h"
 #include "WebServer.h"
-#include "FS.h"
-#include "LittleFS.h"
-#include "ArduinoJson.h"
+
+void listDir(fs::FS &fs, const char * dirname, uint8_t levels) {
+  Serial.printf("Listing directory: %s\n", dirname);
+
+  File root = fs.open(dirname);
+  if(!root){
+    Serial.println("Failed to open directory");
+    return;
+  }
+  if(!root.isDirectory()){
+    Serial.println("Not a directory");
+    return;
+  }
+
+  File file = root.openNextFile();
+  while(file){
+    if(file.isDirectory()){
+      Serial.print("  DIR : ");
+      Serial.println(file.name());
+      if(levels){
+        listDir(fs, file.name(), levels - 1);
+      }
+    } else {
+      Serial.print("  FILE: ");
+      Serial.print(file.name());
+      Serial.print("\tSIZE: ");
+      Serial.println(file.size());
+    }
+    file = root.openNextFile();
+  }
+}
 
 void setup() {
-    // Initialize serial first for debugging
-    Serial.begin(115200);
-    delay(8000);
-    Serial.println("Starting initialization...");
-    
-    // Initialize SPIFFS (only once for all components)
+  Serial.begin(115200);
+  delay(8000);
+  
     if (!SPIFFS.begin(true)) {
-        Serial.println("SPIFFS mount failed");
-        return;
-    }
-    
-    // Initialize module info - this will read the component files and create config.json
-    initializeModuleInfo();
-    Serial.println("Module info initialized");
-    
-    // Initialize serial handler
-    // initializeSerialHandler();
-    // Serial.println("Serial handler initialized");
-    
-    // Initialize key matrix
-    // initializeKeys();
-    // Serial.println("Keys initialized");
+      Serial.println("An error occurred while mounting SPIFFS. Formatting...");
+      // Formatting SPIFFS
+      if (SPIFFS.format()) {
+          Serial.println("SPIFFS formatted successfully. Rebooting...");
+          ESP.restart();
+      } else {
+          Serial.println("SPIFFS formatting failed.");
+      }
+      return;
+  }
+  Serial.println("SPIFFS mounted successfully.");
 
-    // Initialize encoder
-    // initializeEncoder();
-    // Serial.println("Encoder initialized");
-    
-    // Initialize LEDs
-    // initializeLED();
-    // Serial.println("LEDs initialized");
-
-    // Initialize display
-    // initializeDisplay();
-    // Serial.println("Display initialized");
-    
-    // Initialize web server
-    // webServer = new WebServer();
-    // webServer->begin();
-    // Serial.println("Web server initialized");
-    
-    Serial.println("Initialization complete");
+  listDir(SPIFFS, "/", 0);
 }
 
 void loop() {
-    // Heartbeat
-    Serial.println("Heartbeat..."); 
-    delay(5000);
-
-
-    // Handle serial commands
-    // handleSerialCommands();
-    
-    // Handle encoder
-    // handleEncoderMovement();
-
-    // Handle key presses
-    // handleKeyPresses();
-    
-    // Update display
-    // updateDisplay();
+  // Nothing to do here.
 }

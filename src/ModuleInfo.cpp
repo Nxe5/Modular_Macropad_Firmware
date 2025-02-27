@@ -71,8 +71,8 @@ uint8_t countComponentsByType(const String& componentsJson, const char* componen
 void initializeModuleInfo() {
     // Load configuration files
     moduleInfo.infoJson = readJsonFile("/data/info.json");
-    moduleInfo.componentsJson = readJsonFile("/data/components.json");
-    moduleInfo.ledsJson = readJsonFile("/data/LEDs.json");
+    moduleInfo.componentsJson = readJsonFile("/components.json");
+    moduleInfo.ledsJson = readJsonFile("/LEDs.json");
     
     // Get unique ID from ESP32
     uint64_t chipId = ESP.getEfuseMac();
