@@ -3,16 +3,15 @@
 #include "ArduinoJson.h"
 
 #include "ModuleConfiguration.h"
-#include "ModuleInfo.h"
+#include "ModuleSetup.h"
 
 #include "DisplayHandler.h"
 #include "KeyHandler.h"
 #include "EncoderHandler.h"
 #include "LEDHandler.h"
-#include "SerialHandler.h"
-#include "WebServer.h"
 
-void listDir(fs::FS &fs, const char * dirname, uint8_t levels) {
+// Function to list files in SPIFFS directory
+void listDir(fs::FS &fs, const char* dirname, uint8_t levels) {
   Serial.printf("Listing directory: %s\n", dirname);
 
   File root = fs.open(dirname);
@@ -44,25 +43,82 @@ void listDir(fs::FS &fs, const char * dirname, uint8_t levels) {
 }
 
 void setup() {
+  // Start serial communication
   Serial.begin(115200);
-  delay(8000);
+  delay(10000); // Give time for serial monitor to connect
   
-    if (!SPIFFS.begin(true)) {
-      Serial.println("An error occurred while mounting SPIFFS. Formatting...");
-      // Formatting SPIFFS
-      if (SPIFFS.format()) {
-          Serial.println("SPIFFS formatted successfully. Rebooting...");
-          ESP.restart();
-      } else {
-          Serial.println("SPIFFS formatting failed.");
-      }
-      return;
+  Serial.println("\n\n==== ESP32 Macropad Initializing ====");
+  
+  // Try mounting with basic error handling
+  bool spiffsStarted = false;
+  try {
+    spiffsStarted = SPIFFS.begin(false);  // Try without auto-format first
+    Serial.println("SPIFFS.begin executed without crashing");
+  } catch (...) {
+    Serial.println("SPIFFS.begin caused an exception");
   }
-  Serial.println("SPIFFS mounted successfully.");
-
+  
+  if (!spiffsStarted) {
+    Serial.println("SPIFFS mount failed, will try explicit format");
+    delay(100);
+    
+    bool formatSuccess = false;
+    try {
+      formatSuccess = SPIFFS.format();
+      Serial.println("Format operation completed");
+    } catch (...) {
+      Serial.println("Format operation caused an exception");
+    }
+    
+    if (formatSuccess) {
+      Serial.println("Format successful, trying to mount again");
+      delay(100);
+      
+      try {
+        spiffsStarted = SPIFFS.begin(false);
+        Serial.println("Second mount attempt completed");
+      } catch (...) {
+        Serial.println("Second mount attempt caused an exception");
+      }
+      
+      if (spiffsStarted) {
+        Serial.println("SPIFFS mounted successfully after formatting");
+      } else {
+        Serial.println("SPIFFS still won't mount even after formatting");
+      }
+    } else {
+      Serial.println("Format failed");
+    }
+  } else {
+    Serial.println("SPIFFS mounted successfully on first try");
+  }
+  
+  // Continue with or without SPIFFS
+  Serial.println("Continuing with initialization...");
+  
+  // List files in storage
   listDir(SPIFFS, "/", 0);
+  
+  // Initialize module information first
+  Serial.println("Initializing module info...");
+  initializeModuleInfo();
+  
+  // Initialize hardware components
+  Serial.println("Initializing LED handler...");
+  initializeLED();
+  delay(3000);
+
+  
+  Serial.println("Initialization complete!");
 }
 
 void loop() {
-  // Nothing to do here.
+  // Heartbeat 
+  Serial.println("Heartbeat..");
+
+  // Handle LED animations and updates
+  updateLEDs();
+  
+  // Small delay to prevent CPU hogging
+  delay(10000);
 }

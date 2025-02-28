@@ -1,4 +1,4 @@
-// ModuleInfo.h
+// ModuleSetup.h
 #ifndef MODULE_INFO_H
 #define MODULE_INFO_H
 

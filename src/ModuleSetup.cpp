@@ -1,5 +1,5 @@
-// ModuleInfo.cpp
-#include "ModuleInfo.h"
+// ModuleSetup.cpp
+#include "ModuleSetup.h"
 #include <ArduinoJson.h>
 #include "FS.h"
 #include "SPIFFS.h"
@@ -70,9 +70,9 @@ uint8_t countComponentsByType(const String& componentsJson, const char* componen
 
 void initializeModuleInfo() {
     // Load configuration files
-    moduleInfo.infoJson = readJsonFile("/data/info.json");
-    moduleInfo.componentsJson = readJsonFile("/components.json");
-    moduleInfo.ledsJson = readJsonFile("/LEDs.json");
+    moduleInfo.infoJson = readJsonFile("/config/info.json");
+    moduleInfo.componentsJson = readJsonFile("/config/components.json");
+    moduleInfo.ledsJson = readJsonFile("/config/LEDs.json");
     
     // Get unique ID from ESP32
     uint64_t chipId = ESP.getEfuseMac();
@@ -182,7 +182,7 @@ bool mergeConfigFiles() {
     serializeJsonPretty(configDoc, configJson);
     
     // Save to config.json
-    return writeJsonFile("/data/config.json", configJson);
+    return writeJsonFile("/data/config/config.json", configJson);
 }
 
 ModuleCapabilities getModuleCapabilities() {
@@ -259,7 +259,7 @@ const char* getModuleSizeName(ModuleSize size) {
 }
 
 bool loadModuleConfiguration() {
-    String configJson = readJsonFile("/data/config.json");
+    String configJson = readJsonFile("/data/config/config.json");
     if (configJson.isEmpty()) {
         return false;
     }

@@ -3,7 +3,7 @@
 
 #include <ArduinoJson.h>
 #include <SPIFFS.h>
-#include "ModuleInfo.h"
+#include "ModuleSetup.h"
 
 // Configuration structure
 struct MacropadConfig {
