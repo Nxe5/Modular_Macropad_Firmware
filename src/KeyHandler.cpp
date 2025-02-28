@@ -5,60 +5,158 @@
 KeyHandler* keyHandler = nullptr;
 
 KeyHandler::KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping, 
-                       uint8_t* rows_pins, uint8_t* colPins) : 
-    numRows(rows), numCols(cols) 
+                       uint8_t* rows_pins, uint8_t* colPins) 
 {
-    // Allocate and copy key mapping
-    keyMap = new char*[rows];
-    for (uint8_t i = 0; i < rows; i++) {
-        keyMap[i] = new char[cols];
-        for (uint8_t j = 0; j < cols; j++) {
-            keyMap[i][j] = keyMapping[i][j];
-        }
+    // Initialize member variables in the constructor body
+    numRows = rows;
+    numCols = cols;
+    keyMap = nullptr;
+    rowPins = nullptr;
+    this->colPins = nullptr;
+    keypad = nullptr;
+    actionMap = nullptr;
+
+    // Strict bounds checking
+    if (rows > 10 || cols > 10) {
+        Serial.println("Error: Matrix dimensions too large");
+        return;
     }
-    
-    // Copy pin arrays
-    rowPins = new uint8_t[rows];
-    colPins = new uint8_t[cols];
-    memcpy(rowPins, rows_pins, rows * sizeof(uint8_t));
-    memcpy(colPins, colPins, cols * sizeof(uint8_t));
-    
-    // Initialize the keypad instance
-    keypad = new Keypad(makeKeymap((char*)keyMap), rowPins, colPins, rows, cols);
-    
-    // Allocate the action map based on total keys
-    actionMap = new KeyConfig[getTotalKeys()];
-    
-    // Initialize key state arrays
-    for (int i = 0; i < MAX_KEYS; i++) {
-        keyStates[i] = false;
-        lastDebounceTime[i] = 0;
-        lastAction[i] = KEY_NONE;
+
+    // Validate input pointers
+    if (!keyMapping || !rows_pins || !colPins) {
+        Serial.println("Error: Null input pointers");
+        return;
+    }
+
+    // Use placement new or carefully managed dynamic allocation
+    try {
+        // Allocate key map with careful bounds checking
+        keyMap = new char*[rows];
+        for (uint8_t i = 0; i < rows; i++) {
+            keyMap[i] = new char[cols];
+            
+            // Deep copy with bounds checking
+            for (uint8_t j = 0; j < cols; j++) {
+                keyMap[i][j] = (keyMapping[i][j] != '\0') ? keyMapping[i][j] : 'X';
+            }
+        }
+        
+        // Allocate pin arrays
+        rowPins = new uint8_t[rows];
+        this->colPins = new uint8_t[cols];
+        
+        // Safely copy pin arrays
+        memcpy(rowPins, rows_pins, rows * sizeof(uint8_t));
+        memcpy(this->colPins, colPins, cols * sizeof(uint8_t));
+        
+        // Create flattened keymap for Keypad library
+        char* flatKeymap = new char[rows * cols];
+        
+        for (uint8_t i = 0; i < rows; i++) {
+            for (uint8_t j = 0; j < cols; j++) {
+                flatKeymap[i * cols + j] = keyMap[i][j];
+            }
+        }
+        
+        // Initialize keypad with careful error handling
+        keypad = new Keypad(flatKeymap, rowPins, this->colPins, rows, cols);
+        
+        // Configure keypad with safe defaults
+        keypad->setDebounceTime(50);
+        keypad->setHoldTime(500);
+        
+        // Allocate action map with careful sizing
+        uint8_t totalKeys = getTotalKeys();
+        actionMap = new KeyConfig[totalKeys];
+        
+        // Zero-initialize key states
+        memset(keyStates, 0, sizeof(keyStates));
+        memset(lastDebounceTime, 0, sizeof(lastDebounceTime));
+        memset(lastAction, 0, sizeof(lastAction));
+        
+        Serial.printf("KeyHandler initialized successfully. Total keys: %d\n", totalKeys);
+    } 
+    catch (const std::exception& e) {
+        Serial.printf("Exception in constructor: %s\n", e.what());
+        cleanup();
+    } 
+    catch (...) {
+        Serial.println("Unknown exception in constructor");
+        cleanup();
     }
 }
 
 KeyHandler::~KeyHandler() {
-    for (uint8_t i = 0; i < numRows; i++) {
-        delete[] keyMap[i];
+    cleanup();
+}
+
+void KeyHandler::cleanup() {
+    // Free dynamically allocated memory
+    if (keyMap) {
+        for (uint8_t i = 0; i < numRows; i++) {
+            delete[] keyMap[i];
+        }
+        delete[] keyMap;
+        keyMap = nullptr;
     }
-    delete[] keyMap;
-    delete[] rowPins;
-    delete[] colPins;
-    delete[] actionMap;
-    delete keypad;
+    
+    if (rowPins) {
+        delete[] rowPins;
+        rowPins = nullptr;
+    }
+    
+    if (colPins) {
+        delete[] colPins;
+        colPins = nullptr;
+    }
+    
+    if (keypad) {
+        delete keypad;
+        keypad = nullptr;
+    }
+    
+    if (actionMap) {
+        delete[] actionMap;
+        actionMap = nullptr;
+    }
 }
 
 void KeyHandler::begin() {
-    keypad->setDebounceTime(DEBOUNCE_TIME);
-    Serial.println("KeyHandler initialized");
+    if (!keypad) {
+        Serial.println("Error: Keypad not initialized in begin()");
+        return;
+    }
+    
+    try {
+        // Configure row pins as INPUT_PULLUP
+        for (uint8_t i = 0; i < numRows; i++) {
+            pinMode(rowPins[i], INPUT_PULLUP);
+            Serial.printf("Configured Row Pin %d as INPUT_PULLUP\n", rowPins[i]);
+        }
+        
+        // Configure column pins as OUTPUT and set HIGH
+        for (uint8_t j = 0; j < numCols; j++) {
+            pinMode(colPins[j], OUTPUT);
+            digitalWrite(colPins[j], HIGH);
+            Serial.printf("Configured Column Pin %d as OUTPUT\n", colPins[j]);
+        }
+        
+        Serial.println("KeyHandler pin configuration complete");
+    } 
+    catch (...) {
+        Serial.println("Error configuring key matrix pins");
+    }
 }
 
 char KeyHandler::getKey() {
+    if (!keypad) return NO_KEY;
+    
     char key = keypad->getKey();
     return (key == 'X') ? NO_KEY : key;
 }
 
 bool KeyHandler::isKeyPressed(char key) {
+    if (!keypad) return false;
     return keypad->isPressed(key) && key != 'X';
 }
 
@@ -75,73 +173,117 @@ uint8_t KeyHandler::getTotalKeys() {
 }
 
 void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& actions) {
-    // For each key in our matrix, assign action based on button id:
-    // Our convention: key index = (row * numCols + col), and button id = "button-" + (index+1)
     uint8_t totalKeys = getTotalKeys();
+    
+    // Extensive logging and error checking
+    Serial.printf("Loading key configuration for %d keys\n", totalKeys);
+    
     for (uint8_t i = 0; i < totalKeys; i++) {
         String buttonId = "button-" + String(i + 1);
-        if (actions.find(buttonId) != actions.end()) {
-            ActionConfig ac = actions.at(buttonId);
-            // For now, only handling HID actions; add other cases as needed.
-            if (ac.type == "hid") {
-                actionMap[i].type = ACTION_HID;
-                // Convert the hex strings to byte values
-                if (ac.hidReport.size() >= 8) {
-                    for (int j = 0; j < 8; j++) {
-                        actionMap[i].hidReport[j] = strtol(ac.hidReport[j].c_str() + 2, NULL, 16);
+        
+        try {
+            if (actions.find(buttonId) != actions.end()) {
+                ActionConfig ac = actions.at(buttonId);
+                
+                // Detailed action type logging
+                Serial.printf("Configuring %s with action type: %s\n", 
+                              buttonId.c_str(), ac.type.c_str());
+                
+                if (ac.type == "hid") {
+                    actionMap[i].type = ACTION_HID;
+                    // Convert hex strings to byte values
+                    if (ac.hidReport.size() >= 8) {
+                        for (int j = 0; j < 8; j++) {
+                            actionMap[i].hidReport[j] = strtol(ac.hidReport[j].c_str() + 2, NULL, 16);
+                        }
                     }
                 }
+                else if (ac.type == "macro") {
+                    actionMap[i].type = ACTION_MACRO;
+                    actionMap[i].macroId = ac.macroId;
+                }
+                else if (ac.type == "layer") {
+                    actionMap[i].type = ACTION_LAYER;
+                    actionMap[i].targetLayer = ac.targetLayer;
+                }
+                else if (ac.type == "multimedia") {
+                    actionMap[i].type = ACTION_MULTIMEDIA;
+                    // Similar conversion for consumerReport if needed
+                }
             }
-            else if (ac.type == "macro") {
-                actionMap[i].type = ACTION_MACRO;
-                actionMap[i].macroId = ac.macroId;
-            }
-            else if (ac.type == "layer") {
-                actionMap[i].type = ACTION_LAYER;
-                actionMap[i].targetLayer = ac.targetLayer;
-            }
-            else if (ac.type == "multimedia") {
-                actionMap[i].type = ACTION_MULTIMEDIA;
-                // Similar conversion for consumerReport if needed.
-            }
+        } 
+        catch (const std::exception& e) {
+            Serial.printf("Error loading configuration for %s: %s\n", 
+                          buttonId.c_str(), e.what());
         }
     }
-    Serial.println("Loaded key configuration from actions.json");
+    
+    Serial.println("Key configuration loaded successfully");
 }
 
 void KeyHandler::updateKeys() {
-    keypad->getKeys();
-    for (int i = 0; i < LIST_MAX; i++) {
-        if (keypad->key[i].stateChanged && keypad->key[i].kchar != 'X') {
-            char key = keypad->key[i].kchar;
-            int keyIndex = -1;
-            for (int r = 0; r < numRows; r++) {
-                for (int c = 0; c < numCols; c++) {
-                    if (keyMap[r][c] == key) {
-                        keyIndex = r * numCols + c;
-                        break;
+    if (!keypad) {
+        Serial.println("Error: Keypad not initialized in updateKeys()");
+        return;
+    }
+    
+    try {
+        keypad->getKeys();
+        
+        for (int i = 0; i < LIST_MAX; i++) {
+            if (keypad->key[i].stateChanged && keypad->key[i].kchar != 'X') {
+                char key = keypad->key[i].kchar;
+                int keyIndex = -1;
+                
+                // Find key index in the matrix
+                for (int r = 0; r < numRows; r++) {
+                    for (int c = 0; c < numCols; c++) {
+                        if (keyMap[r][c] == key) {
+                            keyIndex = r * numCols + c;
+                            break;
+                        }
                     }
+                    if (keyIndex >= 0) break;
                 }
-                if (keyIndex >= 0) break;
-            }
-            if (keyIndex >= 0 && keyIndex < getTotalKeys()) {
-                bool pressed = (keypad->key[i].kstate == PRESSED || keypad->key[i].kstate == HOLD);
-                handleKeyEvent(keyIndex, pressed);
+                
+                if (keyIndex >= 0 && keyIndex < getTotalKeys()) {
+                    bool pressed = (keypad->key[i].kstate == PRESSED || 
+                                    keypad->key[i].kstate == HOLD);
+                    
+                    handleKeyEvent(keyIndex, pressed);
+                }
             }
         }
+    } 
+    catch (const std::exception& e) {
+        Serial.printf("Exception in updateKeys: %s\n", e.what());
+    } 
+    catch (...) {
+        Serial.println("Unknown exception in updateKeys");
     }
 }
 
 void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
     unsigned long currentTime = millis();
+    
+    // Debounce logic
     if (currentTime - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) return;
     lastDebounceTime[keyIndex] = currentTime;
+    
+    // State change check
     if (keyStates[keyIndex] == pressed) return;
     keyStates[keyIndex] = pressed;
     
+    // Button ID for logging and LED sync
     String buttonId = "button-" + String(keyIndex + 1);
+    
+    // Sync LEDs with button state
     syncLEDsWithButtons(buttonId.c_str(), pressed);
+    
+    // Logging
     Serial.printf("Key %s %s\n", buttonId.c_str(), pressed ? "pressed" : "released");
+    
+    // Determine action
     KeyAction action = pressed ? KEY_PRESS : KEY_RELEASE;
     if (lastAction[keyIndex] != action) {
         lastAction[keyIndex] = action;
@@ -150,8 +292,16 @@ void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
 }
 
 void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
+    // Null check for safety
+    if (keyIndex >= getTotalKeys()) {
+        Serial.printf("Invalid key index: %d\n", keyIndex);
+        return;
+    }
+    
     KeyConfig& config = actionMap[keyIndex];
+    
     Serial.printf("Executing action for button %d (Type: %d)\n", keyIndex + 1, config.type);
+    
     switch (config.type) {
         case ACTION_HID:
             if (action == KEY_PRESS) {

@@ -10,16 +10,16 @@
 #include "ConfigManager.h"
 #include "KeyHandler.h"
 
-#define ROW0 3
-#define ROW1 5
-#define ROW2 26
-#define ROW3 47
-#define ROW4 33
-#define COL0 34
-#define COL1 21
-#define COL2 13
-#define COL3 6
-#define COL4 12
+#define ROW0 3 // Kept (safe GPIO pin)
+#define ROW1 5 // Kept (safe GPIO pin)
+#define ROW2 8 // ROW2 26
+#define ROW3 9 // ROW3 47
+#define ROW4 10 // ROW4 33
+#define COL0 11  // COL0 34
+#define COL1 21 // Kept (safe GPIO pin)
+#define COL2 13 // Kept (safe GPIO pin)
+#define COL3 6 // Kept (safe GPIO pin)
+#define COL4 12 // Kept (safe GPIO pin)
 
 // Function to list files in SPIFFS directory (for debugging)
 void listDir(fs::FS &fs, const char* dirname, uint8_t levels) {
@@ -105,12 +105,61 @@ char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows
     return keyMapping;
 }
 
+// Validate GPIO pins for ESP32-S3
+bool validateGpioPins(uint8_t* pins, uint8_t count) {
+    // Valid GPIO pins for ESP32-S3 are 0-21
+    const int validESP32S3Pins[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 
+        15, 16, 17, 18, 19, 20, 21
+    };
+    
+    for (uint8_t i = 0; i < count; i++) {
+        bool isValid = false;
+        for (int validPin : validESP32S3Pins) {
+            if (pins[i] == validPin) {
+                isValid = true;
+                break;
+            }
+        }
+        
+        if (!isValid) {
+            Serial.printf("Invalid GPIO pin for ESP32-S3: %d\n", pins[i]);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Configure pin modes for key matrix
+void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t cols) {
+    // Validate pins first with more detailed ESP32-S3 validation
+    if (!validateGpioPins(rowPins, rows) || !validateGpioPins(colPins, cols)) {
+        Serial.println("Invalid GPIO pins detected for ESP32-S3!");
+        return;
+    }
+
+    // Additional pin configuration for reliability
+    for (uint8_t i = 0; i < rows; i++) {
+        pinMode(rowPins[i], INPUT_PULLUP);
+        Serial.printf("Configured Row Pin %d as INPUT_PULLUP\n", rowPins[i]);
+    }
+
+    for (uint8_t j = 0; j < cols; j++) {
+        pinMode(colPins[j], OUTPUT);
+        digitalWrite(colPins[j], HIGH);
+        Serial.printf("Configured Column Pin %d as OUTPUT\n", colPins[j]);
+    }
+}
+
 // initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
 void initializeKeyHandler() {
   const uint8_t rows = 5;
   const uint8_t cols = 5;
-  uint8_t rowPins[rows] = {ROW0, ROW1, ROW2, ROW3, ROW4};    // Update with your actual row pins
-  uint8_t colPins[cols] = {COL0, COL1, COL2, COL3, COL4};     // Update with your actual column pins
+  uint8_t rowPins[rows] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+  uint8_t colPins[cols] = {COL0, COL1, COL2, COL3, COL4};
+  
+  // Detailed pin configuration and validation
+  configurePinModes(rowPins, colPins, rows, cols);
   
   // Read components JSON from the file
   String componentsJson = ConfigManager::readFile("/config/components.json");
@@ -139,12 +188,22 @@ const long interval = 10000; // 10 seconds heartbeat
 void setup() {
   // Start serial communication
   Serial.begin(115200);
-  delay(1000);
+  delay(10000);
   
   // Mount SPIFFS with error handling
   if (!SPIFFS.begin(false)) {
     Serial.println("SPIFFS mount failed!");
-    // Attempt a format if desired.
+    // Attempt to format if desired
+    if (SPIFFS.format()) {
+      Serial.println("SPIFFS formatted successfully");
+      if (!SPIFFS.begin(false)) {
+        Serial.println("Failed to mount SPIFFS after formatting");
+        return;
+      }
+    } else {
+      Serial.println("SPIFFS format failed");
+      return;
+    }
   } else {
     Serial.println("SPIFFS mounted successfully.");
   }
@@ -180,5 +239,4 @@ void loop() {
     keyHandler->updateKeys();
   }
   
-  // Other loop operations can be added here...
 }

@@ -10,6 +10,7 @@
 #define MAX_KEYS 25       // Maximum number of keys
 #define DEBOUNCE_TIME 50  // Debounce time in ms
 #define LIST_MAX 10       // As defined by Keypad library
+#define NO_KEY '\0'       // No key pressed
 
 // Action types for key events
 enum ActionType {
@@ -48,6 +49,9 @@ public:
     void loadKeyConfiguration(const std::map<String, ActionConfig>& actions);
     
 private:
+    // Add cleanup method declaration
+    void cleanup();
+
     void handleKeyEvent(uint8_t keyIndex, bool pressed);
     void executeAction(uint8_t keyIndex, KeyAction action);
     
