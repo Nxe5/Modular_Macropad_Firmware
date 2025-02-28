@@ -3,13 +3,15 @@
 
 #include <Arduino.h>
 #include <Keypad.h>
+#include <map>
+#include "ConfigManager.h"
 
 // Constants
-#define MAX_KEYS 25       // Maximum number of keys to track
-#define DEBOUNCE_TIME 50  // Default debounce time in ms
-#define LIST_MAX 10       // Keypad library's LIST_MAX value
+#define MAX_KEYS 25       // Maximum number of keys
+#define DEBOUNCE_TIME 50  // Debounce time in ms
+#define LIST_MAX 10       // As defined by Keypad library
 
-// Action types
+// Action types for key events
 enum ActionType {
     ACTION_NONE,
     ACTION_HID,
@@ -18,43 +20,32 @@ enum ActionType {
     ACTION_LAYER
 };
 
-// Key action events
 enum KeyAction {
     KEY_NONE,
     KEY_PRESS,
-    KEY_RELEASE,
-    KEY_HOLD
+    KEY_RELEASE
 };
 
-// Structure for key action configuration
 struct KeyConfig {
     ActionType type = ACTION_NONE;
-    
-    // For HID keyboard reports
     uint8_t hidReport[8] = {0};
-    
-    // For consumer control reports
     uint8_t consumerReport[4] = {0};
-    
-    // For macros
     String macroId = "";
-    
-    // For layer switching
     String targetLayer = "";
 };
 
 class KeyHandler {
 public:
     KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping, 
-               uint8_t* rows_pins, uint8_t* cols_pins);
+               uint8_t* rowPins, uint8_t* colPins);
     ~KeyHandler();
     
     void begin();
     char getKey();
     bool isKeyPressed(char key);
     uint8_t getTotalKeys();
-    void loadKeyConfiguration();
     void updateKeys();
+    void loadKeyConfiguration(const std::map<String, ActionConfig>& actions);
     
 private:
     void handleKeyEvent(uint8_t keyIndex, bool pressed);
@@ -67,17 +58,19 @@ private:
     uint8_t* colPins;
     Keypad* keypad;
     KeyConfig* actionMap;
+    
+    bool keyStates[MAX_KEYS];
+    unsigned long lastDebounceTime[MAX_KEYS];
+    KeyAction lastAction[MAX_KEYS];
 };
 
-// Global key handler instance (extern declaration)
 extern KeyHandler* keyHandler;
 
-// Initialization and update functions
 void initializeKeyHandler();
 void updateKeyHandler();
 void cleanupKeyHandler();
 
-// Forward declaration for LED synchronization function (defined in LEDHandler.cpp)
+// For LED sync (defined elsewhere)
 void syncLEDsWithButtons(const char* buttonId, bool pressed);
 
 #endif // KEY_HANDLER_H

@@ -2,7 +2,7 @@
   "leds": {
     "layer-name": "default-led-layer",
     "active": true,
-    "pin": 7,
+    "pin": 38,
     "type": "sk6812",
     "brightness": 50,
     "animation": {

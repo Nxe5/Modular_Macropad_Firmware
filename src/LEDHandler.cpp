@@ -372,12 +372,12 @@ void syncLEDsWithButtons(const char* buttonId, bool pressed) {
     }
 }
 
-// Handle LED updates in the main loop
-void updateLEDs() {
-    if (animationActive) {
-        updateAnimation();
-    }
-}
+// // Handle LED updates in the main loop
+// void updateLEDs() {
+//     if (animationActive) {
+//         updateAnimation();
+//     }
+// }
 
 // Get LED configuration as JSON string
 String getLEDConfigJson() {
