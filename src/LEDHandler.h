@@ -7,7 +7,7 @@
 #include <ArduinoJson.h>
 
 // Default LED PIN and count (used if config file is missing)
-#define DEFAULT_LED_PIN 7
+#define DEFAULT_LED_PIN 38
 #define DEFAULT_NUM_LEDS 18
 
 // LED Modes

@@ -2,7 +2,6 @@
 #include "SPIFFS.h"
 #include "ArduinoJson.h"
 
-#include "ModuleConfiguration.h"
 #include "ModuleSetup.h"
 
 #include "DisplayHandler.h"
@@ -106,8 +105,12 @@ void setup() {
   // Initialize hardware components
   Serial.println("Initializing LED handler...");
   initializeLED();
+  
+  // Initialize keys (this was missing)
+  Serial.println("Initializing key handler...");
+  initializeKeyHandler();
+  
   delay(3000);
-
   
   Serial.println("Initialization complete!");
 }
@@ -118,6 +121,9 @@ void loop() {
 
   // Handle LED animations and updates
   updateLEDs();
+  
+  // Handle key inputs (this was missing)
+  updateKeyHandler();
   
   // Small delay to prevent CPU hogging
   delay(10000);
