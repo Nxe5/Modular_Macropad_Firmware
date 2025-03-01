@@ -424,6 +424,7 @@ void customKeyHandler() {
     digitalWrite(rowPins[r], HIGH);
   }
 }
+
 void safeButtonTest() {
   // Only test one specific button to avoid hardware conflicts
   // Button-1 at row 0, column 3
@@ -466,6 +467,98 @@ void safeButtonTest() {
   delay(1000);
 }
 
+void initializeEncoderHandler() {
+    // Read components JSON from the file
+    String componentsJson = ConfigManager::readFile("/config/components.json");
+    Serial.println("Loading components from JSON...");
+    
+    // Parse the components to get encoder configurations
+    std::vector<Component> components = ConfigManager::loadComponents("/config/components.json");
+    
+    // Count encoders
+    uint8_t encoderCount = 0;
+    for (const Component& comp : components) {
+        if (comp.type == "encoder") {
+            encoderCount++;
+        }
+    }
+    
+    Serial.printf("Found %d encoders in configuration\n", encoderCount);
+    
+    // Create handler if we have encoders
+    if (encoderCount > 0) {
+        encoderHandler = new EncoderHandler(encoderCount);
+        
+        // Configure each encoder
+        uint8_t encoderIndex = 0;
+        for (const Component& comp : components) {
+            if (comp.type == "encoder") {
+                // Parse the JSON to extract encoder-specific configuration
+                DynamicJsonDocument doc(8192);
+                DeserializationError error = deserializeJson(doc, componentsJson);
+                
+                if (error) {
+                    Serial.printf("Error parsing components JSON: %s\n", error.c_str());
+                    continue;
+                }
+                
+                // Find this encoder in the parsed JSON
+                JsonArray jsonComponents = doc["components"].as<JsonArray>();
+                JsonObject encoderConfig;
+                
+                for (JsonObject component : jsonComponents) {
+                    if (component["id"].as<String>() == comp.id) {
+                        encoderConfig = component;
+                        break;
+                    }
+                }
+                
+                if (!encoderConfig.isNull()) {
+                    // Determine encoder type
+                    EncoderType type = ENCODER_TYPE_MECHANICAL;
+                    if (encoderConfig.containsKey("configuration") && 
+                        encoderConfig["configuration"].containsKey("type") &&
+                        encoderConfig["configuration"]["type"].as<String>() == "as5600") {
+                        type = ENCODER_TYPE_AS5600;
+                    }
+                    
+                    // Get pins and configuration
+                    uint8_t pinA = 0, pinB = 0;
+                    int8_t direction = 1;
+                    
+                    if (encoderConfig.containsKey("mechanical")) {
+                        pinA = encoderConfig["mechanical"]["pin_a"] | 0;
+                        pinB = encoderConfig["mechanical"]["pin_b"] | 0;
+                    }
+                    
+                    if (encoderConfig.containsKey("configuration") && 
+                        encoderConfig["configuration"].containsKey("direction")) {
+                        direction = encoderConfig["configuration"]["direction"] | 1;
+                    }
+                    
+                    // Configure this encoder
+                    Serial.printf("Configuring %s: type=%d, pinA=%d, pinB=%d, direction=%d\n", 
+                                  comp.id.c_str(), type, pinA, pinB, direction);
+                    
+                    encoderHandler->configureEncoder(
+                        encoderIndex++,
+                        type,
+                        pinA,
+                        pinB,
+                        direction,
+                        0 // zeroPosition
+                    );
+                }
+            }
+        }
+        
+        // Initialize the configured encoders
+        encoderHandler->begin();
+        Serial.println("Encoder handler initialized successfully");
+    } else {
+        Serial.println("No encoders found in configuration");
+    }
+}
 unsigned long previousMillis = 0;
 const long interval = 10000; // 10 seconds heartbeat
 
@@ -504,6 +597,9 @@ void setup() {
   
   Serial.println("Initializing key handler...");
   initializeKeyHandler();
+
+  Serial.println("Initializing encoder handler...");
+  initializeEncoderHandler();
   
   delay(3000);
   Serial.println("Initialization complete!");
@@ -531,5 +627,11 @@ void loop() {
   if (keyHandler) {
     keyHandler->updateKeys(); // using custom handler instead 
     keyHandler->diagnostics(); // Print key state every 5 seconds
+  }
+
+    // Update and check encoders
+  if (encoderHandler) {
+      encoderHandler->updateEncoders();
+      encoderHandler->diagnostics(); // This will print encoder state every 5 seconds
   }
 }

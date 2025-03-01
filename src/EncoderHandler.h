@@ -8,6 +8,11 @@
 #include <map>
 #include "ConfigManager.h"
 
+// Forward declaration:
+class EncoderHandler;
+
+extern EncoderHandler* encoderHandler;
+
 // Maximum number of encoders supported
 #define MAX_ENCODERS 6
 

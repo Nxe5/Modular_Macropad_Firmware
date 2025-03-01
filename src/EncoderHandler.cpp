@@ -64,44 +64,6 @@ void EncoderHandler::cleanup() {
     }
 }
 
-void EncoderHandler::begin() {
-    if (!encoderConfigs) {
-        Serial.println("Error: Encoders not initialized in begin()");
-        return;
-    }
-
-    // Initialize encoders based on their type
-    for (uint8_t i = 0; i < numEncoders; i++) {
-        EncoderConfig& config = encoderConfigs[i];
-
-        // Initialize based on encoder type
-        switch (config.type) {
-            case ENCODER_TYPE_MECHANICAL:
-                // Create mechanical encoder if pins are valid
-                if (config.pinA > 0 && config.pinB > 0) {
-                    mechanicalEncoders[i] = new Encoder(config.pinA, config.pinB);
-                }
-                break;
-
-            case ENCODER_TYPE_AS5600:
-                // Initialize I2C for AS5600
-                Wire.begin(config.pinA, config.pinB); // SDA, SCL
-                as5600Encoders[i].begin();
-                
-                // Configure zero position and initial state
-                as5600Encoders[i].setOffset(config.zeroPosition);
-                config.lastRawPosition = as5600Encoders[i].getPosition();
-                break;
-
-            default:
-                Serial.printf("Unsupported encoder type for encoder %d\n", i);
-                break;
-        }
-    }
-
-    Serial.println("Encoder Handler initialization complete");
-}
-
 void EncoderHandler::configureEncoder(
     uint8_t encoderIndex, 
     EncoderType type, 
@@ -154,23 +116,89 @@ void EncoderHandler::handleMechanicalEncoder(uint8_t encoderIndex) {
 void EncoderHandler::handleAS5600Encoder(uint8_t encoderIndex) {
     EncoderConfig& config = encoderConfigs[encoderIndex];
     
-    // Read current raw position
-    uint16_t currentRawPosition = as5600Encoders[encoderIndex].getPosition();
-    
-    // Calculate position difference
-    static const uint16_t MAX_POSITION = 4096; // 12-bit encoder
-    int16_t rawDiff = ((int16_t)currentRawPosition - (int16_t)config.lastRawPosition + MAX_POSITION) % MAX_POSITION;
-    
-    // Adjust for wrap-around
-    if (rawDiff > MAX_POSITION / 2) {
-        rawDiff -= MAX_POSITION;
+    // Check if sensor is responding
+    if (!as5600Encoders[encoderIndex].isConnected()) {
+        Serial.printf("Warning: AS5600 encoder %d not connected\n", encoderIndex);
+        return;
     }
     
-    // Update absolute position
-    config.absolutePosition += rawDiff * config.direction;
+    // Get current raw position (0-4095)
+    uint16_t currentRawPosition = as5600Encoders[encoderIndex].rawAngle();
     
-    // Update last raw position
+    // On first read, just store the position
+    if (config.lastRawPosition == 0 && config.absolutePosition == 0) {
+        config.lastRawPosition = currentRawPosition;
+        return;
+    }
+    
+    // Calculate movement considering wrap-around
+    const uint16_t MAX_POSITION = 4096; // 12-bit encoder
+    int16_t rawDiff;
+    
+    // Handle wrap-around in both directions
+    if (currentRawPosition >= config.lastRawPosition) {
+        // Normal case - no wrap-around
+        rawDiff = currentRawPosition - config.lastRawPosition;
+        
+        // Check if this might be a wrap-around from high to low
+        if (rawDiff > MAX_POSITION / 2) {
+            rawDiff = -(MAX_POSITION - rawDiff);
+        }
+    } else {
+        // currentRawPosition < lastRawPosition
+        rawDiff = -(config.lastRawPosition - currentRawPosition);
+        
+        // Check if this might be a wrap-around from low to high
+        if (-rawDiff > MAX_POSITION / 2) {
+            rawDiff = MAX_POSITION + rawDiff;
+        }
+    }
+    
+    // Apply direction and update position
+    config.absolutePosition += rawDiff * config.direction;
     config.lastRawPosition = currentRawPosition;
+}
+
+void EncoderHandler::begin() {
+    if (!encoderConfigs) {
+        Serial.println("Error: Encoders not initialized in begin()");
+        return;
+    }
+
+    // Initialize encoders based on their type
+    for (uint8_t i = 0; i < numEncoders; i++) {
+        EncoderConfig& config = encoderConfigs[i];
+
+        // Initialize based on encoder type
+        switch (config.type) {
+            case ENCODER_TYPE_MECHANICAL:
+                // Create mechanical encoder if pins are valid
+                if (config.pinA > 0 && config.pinB > 0) {
+                    mechanicalEncoders[i] = new Encoder(config.pinA, config.pinB);
+                }
+                break;
+
+            case ENCODER_TYPE_AS5600:
+                // Initialize I2C for AS5600
+                Wire.begin(config.pinA, config.pinB); // SDA, SCL
+                as5600Encoders[i].begin();
+                
+                // Optional: Check magnet detection
+                if (!as5600Encoders[i].detectMagnet()) {
+                    Serial.printf("No magnet detected for encoder %d\n", i);
+                }
+                
+                // Configure initial state
+                config.lastRawPosition = as5600Encoders[i].rawAngle();
+                break;
+
+            default:
+                Serial.printf("Unsupported encoder type for encoder %d\n", i);
+                break;
+        }
+    }
+
+    Serial.println("Encoder Handler initialization complete");
 }
 
 long EncoderHandler::getEncoderPosition(uint8_t encoderIndex) const {
