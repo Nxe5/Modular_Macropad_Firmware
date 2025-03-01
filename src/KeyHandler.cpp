@@ -1,3 +1,5 @@
+// KeyHandler.cpp
+
 #include "KeyHandler.h"
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
@@ -217,46 +219,73 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
     
     Serial.println("Key configuration loaded successfully");
 }
-
 void KeyHandler::updateKeys() {
-    if (!keypad) {
-        Serial.println("Error: Keypad not initialized in updateKeys()");
-        return;
+    // Use a reversed scanning method that works well with diode–protected keys.
+    static unsigned long lastScan = 0;
+    const unsigned long scanInterval = 20; // scan every 20ms
+    if (millis() - lastScan < scanInterval) return;
+    lastScan = millis();
+    
+    // Configure rows as OUTPUT and columns as INPUT_PULLUP:
+    for (uint8_t r = 0; r < numRows; r++) {
+        pinMode(rowPins[r], OUTPUT);
+        digitalWrite(rowPins[r], HIGH); // Initially high (inactive)
+    }
+    for (uint8_t c = 0; c < numCols; c++) {
+        pinMode(colPins[c], INPUT_PULLUP);
     }
     
-    try {
-        keypad->getKeys();
+    // Scan one row at a time:
+    for (uint8_t r = 0; r < numRows; r++) {
+        // Drive current row LOW
+        digitalWrite(rowPins[r], LOW);
+        delayMicroseconds(50); // Allow signals to stabilize
         
-        for (int i = 0; i < LIST_MAX; i++) {
-            if (keypad->key[i].stateChanged && keypad->key[i].kchar != 'X') {
-                char key = keypad->key[i].kchar;
-                int keyIndex = -1;
+        // Check each column on this row:
+        for (uint8_t c = 0; c < numCols; c++) {
+            uint8_t keyIndex = r * numCols + c;
+            bool currentReading = (digitalRead(colPins[c]) == LOW);
+            
+            // Debouncing: check if the reading remains consistent for DEBOUNCE_TIME
+            if (millis() - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) {
+                continue;
+            }
+            
+            // If the key state has changed, update our state and handle the event
+            if (currentReading != keyStates[keyIndex]) {
+                lastDebounceTime[keyIndex] = millis();
+                keyStates[keyIndex] = currentReading;
                 
-                // Find key index in the matrix
-                for (int r = 0; r < numRows; r++) {
-                    for (int c = 0; c < numCols; c++) {
-                        if (keyMap[r][c] == key) {
-                            keyIndex = r * numCols + c;
-                            break;
-                        }
-                    }
-                    if (keyIndex >= 0) break;
+                // Map the matrix coordinate (r,c) to a button ID using your keyMap
+                char keyChar = keyMap[r][c];
+                String buttonId;
+                if (keyChar >= '1' && keyChar <= '9') {
+                    buttonId = "button-" + String(keyChar - '0');
+                } else if (keyChar >= 'A' && keyChar <= 'Z') {
+                    int buttonNum = (keyChar - 'A') + 10;
+                    buttonId = "button-" + String(buttonNum);
+                } else if (keyChar >= 'a' && keyChar <= 'z') {
+                    int encoderNum = (keyChar - 'a') + 1;
+                    buttonId = "encoder-" + String(encoderNum);
+                } else {
+                    buttonId = "unknown-" + String(keyIndex);
                 }
                 
-                if (keyIndex >= 0 && keyIndex < getTotalKeys()) {
-                    bool pressed = (keypad->key[i].kstate == PRESSED || 
-                                    keypad->key[i].kstate == HOLD);
-                    
-                    handleKeyEvent(keyIndex, pressed);
+                // Log and sync LED feedback
+                Serial.printf("Key event: Row %d, Col %d, ID=%s, State=%s\n", 
+                              r, c, buttonId.c_str(), currentReading ? "PRESSED" : "RELEASED");
+                syncLEDsWithButtons(buttonId.c_str(), currentReading);
+                
+                // Determine the action type based on press/release
+                KeyAction action = currentReading ? KEY_PRESS : KEY_RELEASE;
+                if (lastAction[keyIndex] != action) {
+                    lastAction[keyIndex] = action;
+                    executeAction(keyIndex, action);
                 }
             }
         }
-    } 
-    catch (const std::exception& e) {
-        Serial.printf("Exception in updateKeys: %s\n", e.what());
-    } 
-    catch (...) {
-        Serial.println("Unknown exception in updateKeys");
+        // Set the row back to inactive
+        digitalWrite(rowPins[r], HIGH);
     }
 }
 
@@ -295,23 +324,25 @@ void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
     }
     
     String buttonId;
+    
+    // Handle different character ranges for different component types
     if (keyChar >= '1' && keyChar <= '9') {
+        // Regular buttons 1-9
         buttonId = "button-" + String(keyChar - '0');
-    }
+    } 
     else if (keyChar >= 'A' && keyChar <= 'Z') {
-        // Handle buttons 10+ or special keys
-        if (keyChar >= 'A' && keyChar <= 'Z') {
-            int buttonNum = (keyChar - 'A') + 10;  // A=10, B=11, etc.
-            buttonId = "button-" + String(buttonNum);
-        }
-    }
-    else if (keyChar >= 'E' && keyChar <= 'J') {  // Assuming encoders E-J
-        int encoderNum = keyChar - 'E' + 1;
+        // Buttons 10-35
+        int buttonNum = (keyChar - 'A') + 10;
+        buttonId = "button-" + String(buttonNum);
+    } 
+    else if (keyChar >= 'a' && keyChar <= 'z') {
+        // Encoders (lowercase letters represent encoders)
+        int encoderNum = (keyChar - 'a') + 1;
         buttonId = "encoder-" + String(encoderNum);
-    }
+    } 
     else {
-        // Fallback - use key index directly if no mapping found
-        buttonId = "button-" + String(keyIndex + 1);
+        // Fallback for any unexpected characters
+        buttonId = "unknown-" + String(keyIndex);
     }
     
     // Log detailed information for debugging

@@ -21,6 +21,86 @@
 #define COL3 6  // Kept (safe GPIO pin)
 #define COL4 12 // Kept (safe GPIO pin)
 
+void directKeyboardScan() {
+  uint8_t rowPins[5] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+  uint8_t colPins[5] = {COL0, COL1, COL2, COL3, COL4};
+  
+  // First set all pins to a known state
+  for (int r = 0; r < 5; r++) {
+    pinMode(rowPins[r], INPUT_PULLUP);
+  }
+  
+  for (int c = 0; c < 5; c++) {
+    pinMode(colPins[c], INPUT);  // High impedance when not scanning
+  }
+  
+  // Scan one column at a time with verbose debugging
+  for (int c = 0; c < 5; c++) {
+    // Explicitly set this column as OUTPUT and drive it LOW
+    pinMode(colPins[c], OUTPUT);
+    digitalWrite(colPins[c], LOW);
+    
+    // Verify the pin is actually LOW
+    Serial.printf("Setting column %d (pin %d) LOW. Voltage should be 0V\n", 
+                  c, colPins[c]);
+    
+    // Longer delay to allow measurement
+    delay(1000);
+    
+    // Check all rows
+    for (int r = 0; r < 5; r++) {
+      int rowValue = digitalRead(rowPins[r]);
+      Serial.printf("Row %d (pin %d): %s\n", 
+                    r, rowPins[r], rowValue == LOW ? "PRESSED" : "not pressed");
+    }
+    
+    // Reset column to high impedance
+    pinMode(colPins[c], INPUT);
+    
+    // Allow time between columns
+    delay(500);
+  }
+}
+
+void testBasicGPIO() {
+  // Clear all previous pin settings
+  for(int i=0; i<22; i++) {
+    pinMode(i, INPUT);
+  }
+  
+  // Test a single GPIO pin that isn't part of your matrix
+  const int testPin = 6; // Choose an unused GPIO pin
+  
+  pinMode(testPin, OUTPUT);
+  
+  // Toggle between HIGH and LOW every second
+  while(true) {
+    digitalWrite(testPin, LOW);
+    Serial.println("Pin set to LOW - measure now");
+    delay(2000);
+    
+    digitalWrite(testPin, HIGH);
+    Serial.println("Pin set to HIGH - measure now");
+    delay(2000);
+  }
+}
+
+// Function to set all columns LOW for testing
+void setAllColumnsLow() {
+  uint8_t colPins[5] = {COL0, COL1, COL2, COL3, COL4};
+  
+  Serial.println("Setting all columns LOW for testing...");
+  
+  // Configure columns as OUTPUT
+  for (int c = 0; c < 5; c++) {
+    pinMode(colPins[c], OUTPUT);
+    digitalWrite(colPins[c], LOW);  // Set LOW
+    Serial.printf("Column %d (pin %d) set to LOW\n", c, colPins[c]);
+  }
+  
+  Serial.println("All columns set to LOW. You can now measure each pin.");
+}
+
 // Function to list files in SPIFFS directory (for debugging)
 void listDir(fs::FS &fs, const char* dirname, uint8_t levels) {
   Serial.printf("Listing directory: %s\n", dirname);
@@ -51,7 +131,7 @@ void listDir(fs::FS &fs, const char* dirname, uint8_t levels) {
   }
 }
 
-// Improved key mapping creation from components.json
+// Improved key mapping creation from components.json with no character overlaps
 char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows, uint8_t cols) {
     // Allocate the key mapping grid
     char** keyMapping = new char*[rows];
@@ -89,28 +169,33 @@ char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows
             uint8_t startRow = component["start_location"]["row"];
             uint8_t startCol = component["start_location"]["column"];
             
-            // Extract the button number from the ID (e.g., "button-1" -> '1')
+            // Extract the component number and create a unique key character
             char keyChar = 'X';
+            
             if (type == "button") {
                 // For buttons, extract number from id (e.g., "button-1" -> '1')
                 int dashPos = id.indexOf('-');
                 if (dashPos >= 0 && dashPos < id.length() - 1) {
                     String numStr = id.substring(dashPos + 1);
                     int buttonNum = numStr.toInt();
+                    
                     if (buttonNum > 0 && buttonNum <= 9) {
-                        keyChar = '0' + buttonNum;  // Convert to char ('1'-'9')
-                    } else if (buttonNum > 9) {
-                        // For buttons 10+, use letters or other encoding
-                        keyChar = 'A' + (buttonNum - 10);  // 10->A, 11->B, etc.
+                        // Buttons 1-9 -> '1'-'9'
+                        keyChar = '0' + buttonNum;
+                    } else if (buttonNum >= 10 && buttonNum <= 35) {
+                        // Buttons 10-35 -> 'A'-'Z'
+                        keyChar = 'A' + (buttonNum - 10);
                     }
                 }
             } else if (type == "encoder" && component["with_button"].as<bool>()) {
-                // For encoder buttons, use special chars to distinguish them
+                // For encoder buttons, use special characters that won't overlap with buttons
+                // Use characters outside the normal ASCII range for better separation
                 int dashPos = id.indexOf('-');
                 if (dashPos >= 0 && dashPos < id.length() - 1) {
                     String numStr = id.substring(dashPos + 1);
                     int encoderNum = numStr.toInt();
-                    keyChar = 'E' + encoderNum - 1;  // E for encoder 1, F for encoder 2, etc.
+                    // Use 'a'-'z' range for encoders to differentiate from buttons
+                    keyChar = 'a' + (encoderNum - 1);  // encoder-1 -> 'a', encoder-2 -> 'b', etc.
                 }
             }
             
@@ -262,6 +347,124 @@ void initializeKeyHandler() {
   Serial.println("=== Keyboard Matrix Initialization Complete ===\n");
 }
 
+void customKeyHandler() {
+  static unsigned long lastScan = 0;
+  const unsigned long scanInterval = 20; // ms
+  
+  // Only scan at regular intervals
+  if (millis() - lastScan < scanInterval) {
+    return;
+  }
+  lastScan = millis();
+  
+  uint8_t rowPins[5] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+  uint8_t colPins[5] = {COL0, COL1, COL2, COL3, COL4};
+  
+  // For tracking key state changes and debouncing
+  static bool keyStates[5][5] = {0};
+  static unsigned long lastDebounceTime[5][5] = {0};
+  
+  // IMPORTANT: Reverse the roles of rows and columns
+  // This inverts the scanning direction to work better with diodes
+  
+  // Configure rows as OUTPUT initially (instead of columns)
+  for (int r = 0; r < 5; r++) {
+    pinMode(rowPins[r], OUTPUT);
+    digitalWrite(rowPins[r], HIGH); // Start with HIGH (inactive)
+  }
+  
+  // Configure columns as INPUT_PULLUP (instead of rows)
+  for (int c = 0; c < 5; c++) {
+    pinMode(colPins[c], INPUT_PULLUP);
+  }
+  
+  // Scan one row at a time (reverse of normal scanning)
+  for (int r = 0; r < 5; r++) {
+    // Drive this row LOW
+    digitalWrite(rowPins[r], LOW);
+    
+    delayMicroseconds(50); // Allow signal to stabilize
+    
+    // Check all columns
+    for (int c = 0; c < 5; c++) {
+      // Read the column pin
+      bool currentReading = (digitalRead(colPins[c]) == LOW);
+      
+      // Debouncing
+      if (currentReading != keyStates[r][c]) {
+        lastDebounceTime[r][c] = millis();
+      }
+      
+      if ((millis() - lastDebounceTime[r][c]) > DEBOUNCE_TIME) {
+        if (currentReading != keyStates[r][c]) {
+          keyStates[r][c] = currentReading;
+          
+          if (currentReading) {  // Key pressed
+            // Map to button ID - this might need adjustment for your layout
+            String buttonId = "button-" + String(r * 5 + c + 1);
+            
+            // Override for specific positions if needed
+            if (r == 0 && c == 3) buttonId = "button-1";
+            
+            Serial.printf("Key press: Row %d, Col %d, ID=%s\n", r, c, buttonId.c_str());
+            syncLEDsWithButtons(buttonId.c_str(), true);
+          } else {  // Key released
+            String buttonId = "button-" + String(r * 5 + c + 1);
+            if (r == 0 && c == 3) buttonId = "button-1";
+            
+            Serial.printf("Key release: Row %d, Col %d, ID=%s\n", r, c, buttonId.c_str());
+            syncLEDsWithButtons(buttonId.c_str(), false);
+          }
+        }
+      }
+    }
+    
+    // Set row back to inactive
+    digitalWrite(rowPins[r], HIGH);
+  }
+}
+void safeButtonTest() {
+  // Only test one specific button to avoid hardware conflicts
+  // Button-1 at row 0, column 3
+  uint8_t rowPin = ROW0;  // 3
+  uint8_t colPin = COL4;  // 12
+  
+  // Configure pins carefully
+  pinMode(rowPin, INPUT_PULLUP);
+  pinMode(colPin, OUTPUT);
+  digitalWrite(colPin, LOW);
+  
+  // Read state
+  int reading = digitalRead(rowPin);
+  
+  // Show result
+  Serial.printf("Button test (standard): %s\n", 
+               reading == LOW ? "PRESSED" : "NOT PRESSED");
+  
+  // Reset pins to safe state
+  pinMode(rowPin, INPUT);
+  pinMode(colPin, INPUT);
+  
+  // Try reversed configuration
+  delay(100);
+  pinMode(colPin, INPUT_PULLUP);
+  pinMode(rowPin, OUTPUT);
+  digitalWrite(rowPin, LOW);
+  
+  // Read state
+  reading = digitalRead(colPin);
+  
+  // Show result
+  Serial.printf("Button test (reversed): %s\n", 
+               reading == LOW ? "PRESSED" : "NOT PRESSED");
+  
+  // Reset pins to safe state
+  pinMode(rowPin, INPUT);
+  pinMode(colPin, INPUT);
+  
+  delay(1000);
+}
+
 unsigned long previousMillis = 0;
 const long interval = 10000; // 10 seconds heartbeat
 
@@ -303,6 +506,9 @@ void setup() {
   
   delay(3000);
   Serial.println("Initialization complete!");
+
+  // setAllColumnsLow();  // Test if columns can be driven LOW
+  // Serial.println("Setting all columns LOW for testing!");
 }
 
 void loop() {
@@ -314,12 +520,15 @@ void loop() {
     previousMillis = currentMillis;
   }
   
-  // Update key states.
-  if (keyHandler) {
-    keyHandler->updateKeys();
-    
-    // Run diagnostics periodically
-    keyHandler->diagnostics();
-  }
+  // safeButtonTest(); // Test a single key press
+
+  // Replaced keyHandler->updateKeys() with the custom handler
+  // Esp32 was having issues reading .7v as LOW at 5v pwr
+  // customKeyHandler();
   
+  // Diagnostic visualization
+  if (keyHandler) {
+    keyHandler->updateKeys(); // using custom handler instead 
+    keyHandler->diagnostics(); // Print key state every 5 seconds
+  }
 }
