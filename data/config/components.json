@@ -119,9 +119,33 @@
     {
       "id": "encoder-1",
       "type": "encoder",
-      "size": { "rows": 1, "columns": 1 },
-      "start_location": { "row": 0, "column": 4 },
-      "with_button": true
+      "size": { 
+        "rows": 1, 
+        "columns": 1 
+      },
+      "start_location": { 
+        "row": 0, 
+        "column": 4 
+      },
+      "with_button": true,  
+      "configuration": {
+        "type": "mechanical", 
+        "direction": 1        
+      },
+      "mechanical": {
+        "pin_a": 2,
+        "pin_b": 4,
+        "steps_per_revolution": 24,
+        "detents_per_revolution": 12,
+        "has_physical_detents": true
+      },
+      "as5600": {
+        "pin_sda": null,
+        "pin_scl": null,
+        "steps_per_revolution": 4096,
+        "zero_position": null,
+        "magnet_strength_threshold": null
+      }
     }
   ]
 }

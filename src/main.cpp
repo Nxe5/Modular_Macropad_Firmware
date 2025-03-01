@@ -10,6 +10,7 @@
 #include "ConfigManager.h"
 #include "KeyHandler.h"
 
+//  Will be moved to info.json
 #define ROW0 3  // Kept (safe GPIO pin)
 #define ROW1 5  // Kept (safe GPIO pin)
 #define ROW2 8  // ROW2 26

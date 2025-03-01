@@ -9,6 +9,12 @@
     "rows": 5,
     "columns": 5
   },
+  "hardware": {
+    "matrix": {
+      "rows": [3, 5, 8, 9, 10],
+      "columns": [11, 21, 13, 6, 12]
+    }
+  },
   "defaults": {
     "button": {
       "action": "press",
