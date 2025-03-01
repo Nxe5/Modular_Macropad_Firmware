@@ -10,15 +10,15 @@
 #include "ConfigManager.h"
 #include "KeyHandler.h"
 
-#define ROW0 3 // Kept (safe GPIO pin)
-#define ROW1 5 // Kept (safe GPIO pin)
-#define ROW2 8 // ROW2 26
-#define ROW3 9 // ROW3 47
+#define ROW0 3  // Kept (safe GPIO pin)
+#define ROW1 5  // Kept (safe GPIO pin)
+#define ROW2 8  // ROW2 26
+#define ROW3 9  // ROW3 47
 #define ROW4 10 // ROW4 33
-#define COL0 11  // COL0 34
+#define COL0 11 // COL0 34
 #define COL1 21 // Kept (safe GPIO pin)
 #define COL2 13 // Kept (safe GPIO pin)
-#define COL3 6 // Kept (safe GPIO pin)
+#define COL3 6  // Kept (safe GPIO pin)
 #define COL4 12 // Kept (safe GPIO pin)
 
 // Function to list files in SPIFFS directory (for debugging)
@@ -51,7 +51,7 @@ void listDir(fs::FS &fs, const char* dirname, uint8_t levels) {
   }
 }
 
-// Dynamic key mapping creation from components.json
+// Improved key mapping creation from components.json
 char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows, uint8_t cols) {
     // Allocate the key mapping grid
     char** keyMapping = new char*[rows];
@@ -74,10 +74,10 @@ char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows
 
     // Iterate through components
     JsonArray components = doc["components"].as<JsonArray>();
-    char nextKey = '1';  // Start with '1' as the first key marker
-
+    
     for (JsonObject component : components) {
         String type = component["type"].as<String>();
+        String id = component["id"].as<String>();
         
         // Check if component is a button or an encoder with a button
         if (type == "button" || 
@@ -89,17 +89,53 @@ char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows
             uint8_t startRow = component["start_location"]["row"];
             uint8_t startCol = component["start_location"]["column"];
             
+            // Extract the button number from the ID (e.g., "button-1" -> '1')
+            char keyChar = 'X';
+            if (type == "button") {
+                // For buttons, extract number from id (e.g., "button-1" -> '1')
+                int dashPos = id.indexOf('-');
+                if (dashPos >= 0 && dashPos < id.length() - 1) {
+                    String numStr = id.substring(dashPos + 1);
+                    int buttonNum = numStr.toInt();
+                    if (buttonNum > 0 && buttonNum <= 9) {
+                        keyChar = '0' + buttonNum;  // Convert to char ('1'-'9')
+                    } else if (buttonNum > 9) {
+                        // For buttons 10+, use letters or other encoding
+                        keyChar = 'A' + (buttonNum - 10);  // 10->A, 11->B, etc.
+                    }
+                }
+            } else if (type == "encoder" && component["with_button"].as<bool>()) {
+                // For encoder buttons, use special chars to distinguish them
+                int dashPos = id.indexOf('-');
+                if (dashPos >= 0 && dashPos < id.length() - 1) {
+                    String numStr = id.substring(dashPos + 1);
+                    int encoderNum = numStr.toInt();
+                    keyChar = 'E' + encoderNum - 1;  // E for encoder 1, F for encoder 2, etc.
+                }
+            }
+            
             // Validate the location is within grid bounds
-            if (startRow < rows && startCol < cols) {
-                // Assign a unique key marker
-                keyMapping[startRow][startCol] = nextKey++;
+            if (startRow < rows && startCol < cols && keyChar != 'X') {
+                // Assign the key marker based on component ID
+                keyMapping[startRow][startCol] = keyChar;
                 
                 Serial.printf("Mapped %s at [%d,%d] with key %c\n", 
-                              component["id"].as<String>().c_str(), 
-                              startRow, startCol, 
-                              keyMapping[startRow][startCol]);
+                              id.c_str(), startRow, startCol, keyChar);
             }
         }
+    }
+
+    // Debug print the entire key mapping
+    Serial.println("Key mapping matrix:");
+    for (uint8_t i = 0; i < rows; i++) {
+        Serial.print("Row ");
+        Serial.print(i);
+        Serial.print(": ");
+        for (uint8_t j = 0; j < cols; j++) {
+            Serial.print(keyMapping[i][j]);
+            Serial.print(" ");
+        }
+        Serial.println();
     }
 
     return keyMapping;
@@ -130,25 +166,42 @@ bool validateGpioPins(uint8_t* pins, uint8_t count) {
     return true;
 }
 
-// Configure pin modes for key matrix
+// Consistent pin configuration for key matrix
 void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t cols) {
-    // Validate pins first with more detailed ESP32-S3 validation
+    // Validate pins first with detailed ESP32-S3 validation
     if (!validateGpioPins(rowPins, rows) || !validateGpioPins(colPins, cols)) {
         Serial.println("Invalid GPIO pins detected for ESP32-S3!");
         return;
     }
 
-    // Additional pin configuration for reliability
+    // IMPORTANT: For a matrix keyboard setup:
+    // For a typical matrix keyboard setup:
+    // - Configure rows as INPUT_PULLUP (will be read)
+    // - Configure columns as OUTPUT (will be driven)
+    
+    // First, print the pin assignments for clarity
+    Serial.println("\n--- Pin Configuration ---");
+    Serial.println("Row pins (configured as INPUT_PULLUP):");
+    for (uint8_t i = 0; i < rows; i++) {
+        Serial.printf("  Row %d: GPIO %d\n", i, rowPins[i]);
+    }
+    
+    Serial.println("Column pins (configured as OUTPUT):");
+    for (uint8_t j = 0; j < cols; j++) {
+        Serial.printf("  Column %d: GPIO %d\n", j, colPins[j]);
+    }
+    
+    // Now configure the pins
     for (uint8_t i = 0; i < rows; i++) {
         pinMode(rowPins[i], INPUT_PULLUP);
-        Serial.printf("Configured Row Pin %d as INPUT_PULLUP\n", rowPins[i]);
     }
 
     for (uint8_t j = 0; j < cols; j++) {
         pinMode(colPins[j], OUTPUT);
-        digitalWrite(colPins[j], HIGH);
-        Serial.printf("Configured Column Pin %d as OUTPUT\n", colPins[j]);
+        digitalWrite(colPins[j], HIGH);  // Start with HIGH (inactive)
     }
+    
+    Serial.println("Pin configuration complete\n");
 }
 
 // initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
@@ -158,28 +211,55 @@ void initializeKeyHandler() {
   uint8_t rowPins[rows] = {ROW0, ROW1, ROW2, ROW3, ROW4};
   uint8_t colPins[cols] = {COL0, COL1, COL2, COL3, COL4};
   
-  // Detailed pin configuration and validation
+  Serial.println("\n=== Initializing Keyboard Matrix ===");
+  Serial.println("Matrix dimensions: 5x5");
+  
+  // Log pin assignments for clarity  
+  Serial.println("Row pins:");
+  for (int i = 0; i < rows; i++) {
+    Serial.printf("  Row %d: GPIO %d\n", i, rowPins[i]);
+  }
+  
+  Serial.println("Column pins:");
+  for (int i = 0; i < cols; i++) {
+    Serial.printf("  Column %d: GPIO %d\n", i, colPins[i]);
+  }
+  
+  // Configure pin modes
   configurePinModes(rowPins, colPins, rows, cols);
   
   // Read components JSON from the file
   String componentsJson = ConfigManager::readFile("/config/components.json");
+  Serial.println("Loading components from JSON...");
   
   // Create key mapping dynamically from components
+  Serial.println("Creating key mapping from components...");
   char** keyMapping = createKeyMappingFromComponents(componentsJson, rows, cols);
   
-  // Create and initialize the key handler instance.
+  // Create and initialize the key handler instance
+  Serial.println("Initializing key handler instance...");
   keyHandler = new KeyHandler(rows, cols, keyMapping, rowPins, colPins);
-  keyHandler->begin();
   
-  // Load the actions configuration from SPIFFS (from /config/actions.json)
-  auto actions = ConfigManager::loadActions("/config/actions.json");
-  keyHandler->loadKeyConfiguration(actions);
+  if (keyHandler) {
+    keyHandler->begin();
+    
+    // Load the actions configuration from SPIFFS
+    Serial.println("Loading key action configuration...");
+    auto actions = ConfigManager::loadActions("/config/actions.json");
+    keyHandler->loadKeyConfiguration(actions);
+    
+    Serial.println("Key handler initialization complete");
+  } else {
+    Serial.println("ERROR: Failed to create key handler instance!");
+  }
   
-  // Clean up temporary keyMapping allocation.
+  // Clean up temporary keyMapping allocation
   for (uint8_t i = 0; i < rows; i++) {
     delete[] keyMapping[i];
   }
   delete[] keyMapping;
+  
+  Serial.println("=== Keyboard Matrix Initialization Complete ===\n");
 }
 
 unsigned long previousMillis = 0;
@@ -237,6 +317,9 @@ void loop() {
   // Update key states.
   if (keyHandler) {
     keyHandler->updateKeys();
+    
+    // Run diagnostics periodically
+    keyHandler->diagnostics();
   }
   
 }

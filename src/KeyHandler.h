@@ -1,16 +1,15 @@
 #ifndef KEY_HANDLER_H
 #define KEY_HANDLER_H
-
 #include <Arduino.h>
 #include <Keypad.h>
 #include <map>
 #include "ConfigManager.h"
 
 // Constants
-#define MAX_KEYS 25       // Maximum number of keys
-#define DEBOUNCE_TIME 50  // Debounce time in ms
-#define LIST_MAX 10       // As defined by Keypad library
-#define NO_KEY '\0'       // No key pressed
+#define MAX_KEYS 25 // Maximum number of keys
+#define DEBOUNCE_TIME 50 // Debounce time in ms
+#define LIST_MAX 10 // As defined by Keypad library
+#define NO_KEY '\0' // No key pressed
 
 // Action types for key events
 enum ActionType {
@@ -37,7 +36,7 @@ struct KeyConfig {
 
 class KeyHandler {
 public:
-    KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping, 
+    KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping,
                uint8_t* rowPins, uint8_t* colPins);
     ~KeyHandler();
     
@@ -48,10 +47,12 @@ public:
     void updateKeys();
     void loadKeyConfiguration(const std::map<String, ActionConfig>& actions);
     
+    // Add diagnostic methods
+    void printKeyboardState();
+    void diagnostics();
+    
 private:
-    // Add cleanup method declaration
     void cleanup();
-
     void handleKeyEvent(uint8_t keyIndex, bool pressed);
     void executeAction(uint8_t keyIndex, KeyAction action);
     
@@ -62,10 +63,10 @@ private:
     uint8_t* colPins;
     Keypad* keypad;
     KeyConfig* actionMap;
-    
     bool keyStates[MAX_KEYS];
     unsigned long lastDebounceTime[MAX_KEYS];
     KeyAction lastAction[MAX_KEYS];
+    const unsigned long debounceDelay = 50;
 };
 
 extern KeyHandler* keyHandler;

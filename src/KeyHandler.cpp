@@ -128,23 +128,20 @@ void KeyHandler::begin() {
     }
     
     try {
-        // Configure row pins as INPUT_PULLUP
-        for (uint8_t i = 0; i < numRows; i++) {
-            pinMode(rowPins[i], INPUT_PULLUP);
-            Serial.printf("Configured Row Pin %d as INPUT_PULLUP\n", rowPins[i]);
-        }
+        // NOTE: We're not changing pin modes here anymore since they're already
+        // configured in configurePinModes() - this prevents conflicts
         
-        // Configure column pins as OUTPUT and set HIGH
-        for (uint8_t j = 0; j < numCols; j++) {
-            pinMode(colPins[j], OUTPUT);
-            digitalWrite(colPins[j], HIGH);
-            Serial.printf("Configured Column Pin %d as OUTPUT\n", colPins[j]);
-        }
+        Serial.println("KeyHandler initialization complete - using configuration from configurePinModes()");
         
-        Serial.println("KeyHandler pin configuration complete");
+        // Configure the keypad library's settings
+        if (keypad) {
+            keypad->setDebounceTime(DEBOUNCE_TIME);
+            keypad->setHoldTime(500);
+            Serial.println("Keypad library configured with debounce time: " + String(DEBOUNCE_TIME) + "ms");
+        }
     } 
     catch (...) {
-        Serial.println("Error configuring key matrix pins");
+        Serial.println("Error in KeyHandler::begin()");
     }
 }
 
@@ -266,22 +263,64 @@ void KeyHandler::updateKeys() {
 void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
     unsigned long currentTime = millis();
     
+    // Ensure keyIndex is valid
+    if (keyIndex >= MAX_KEYS) {
+        Serial.printf("Invalid key index: %d (exceeds MAX_KEYS)\n", keyIndex);
+        return;
+    }
+    
     // Debounce logic
-    if (currentTime - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) return;
+    if (currentTime - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) {
+        return;
+    }
     lastDebounceTime[keyIndex] = currentTime;
     
-    // State change check
-    if (keyStates[keyIndex] == pressed) return;
+    // State change check - only react to changes
+    if (keyStates[keyIndex] == pressed) {
+        return;
+    }
     keyStates[keyIndex] = pressed;
     
-    // Button ID for logging and LED sync
-    String buttonId = "button-" + String(keyIndex + 1);
+    // Find the actual button ID from the component configuration for this key
+    // This ensures we're using the correct button ID for actions
+    char keyChar = '\0';
+    for (int r = 0; r < numRows; r++) {
+        for (int c = 0; c < numCols; c++) {
+            if (r * numCols + c == keyIndex && keyMap[r][c] != 'X') {
+                keyChar = keyMap[r][c];
+                break;
+            }
+        }
+        if (keyChar != '\0') break;
+    }
     
-    // Sync LEDs with button state
+    String buttonId;
+    if (keyChar >= '1' && keyChar <= '9') {
+        buttonId = "button-" + String(keyChar - '0');
+    }
+    else if (keyChar >= 'A' && keyChar <= 'Z') {
+        // Handle buttons 10+ or special keys
+        if (keyChar >= 'A' && keyChar <= 'Z') {
+            int buttonNum = (keyChar - 'A') + 10;  // A=10, B=11, etc.
+            buttonId = "button-" + String(buttonNum);
+        }
+    }
+    else if (keyChar >= 'E' && keyChar <= 'J') {  // Assuming encoders E-J
+        int encoderNum = keyChar - 'E' + 1;
+        buttonId = "encoder-" + String(encoderNum);
+    }
+    else {
+        // Fallback - use key index directly if no mapping found
+        buttonId = "button-" + String(keyIndex + 1);
+    }
+    
+    // Log detailed information for debugging
+    Serial.printf("Key event: Index=%d, Char='%c', ID=%s, State=%s\n", 
+                 keyIndex, keyChar ? keyChar : 'X', buttonId.c_str(), 
+                 pressed ? "PRESSED" : "RELEASED");
+    
+    // Sync LEDs with button state if function is available
     syncLEDsWithButtons(buttonId.c_str(), pressed);
-    
-    // Logging
-    Serial.printf("Key %s %s\n", buttonId.c_str(), pressed ? "pressed" : "released");
     
     // Determine action
     KeyAction action = pressed ? KEY_PRESS : KEY_RELEASE;
@@ -294,25 +333,26 @@ void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
 void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
     // Null check for safety
     if (keyIndex >= getTotalKeys()) {
-        Serial.printf("Invalid key index: %d\n", keyIndex);
+        Serial.printf("Invalid key index for action: %d\n", keyIndex);
         return;
     }
     
     KeyConfig& config = actionMap[keyIndex];
     
-    Serial.printf("Executing action for button %d (Type: %d)\n", keyIndex + 1, config.type);
+    Serial.printf("Executing action for key index %d (Type: %d, Action: %d)\n", 
+                 keyIndex, config.type, action);
     
     switch (config.type) {
         case ACTION_HID:
             if (action == KEY_PRESS) {
-                Serial.printf("HID report for button %d: ", keyIndex + 1);
+                Serial.print("HID report: ");
                 for (int i = 0; i < 8; i++) {
                     Serial.printf("%02X ", config.hidReport[i]);
                 }
                 Serial.println();
                 // TODO: Send the HID report via USB/BLE
             } else {
-                Serial.printf("HID button %d released\n", keyIndex + 1);
+                Serial.printf("HID key released\n");
                 // TODO: Send a release HID report (zeroed)
             }
             break;
@@ -335,7 +375,31 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             }
             break;
         default:
-            Serial.printf("No action mapped for button %d\n", keyIndex + 1);
+            Serial.printf("No action mapped for key index %d\n", keyIndex);
             break;
+    }
+}
+
+void KeyHandler::printKeyboardState() {
+    Serial.println("\n--- Keyboard Matrix State ---");
+    for (uint8_t r = 0; r < numRows; r++) {
+        for (uint8_t c = 0; c < numCols; c++) {
+            char key = keyMap[r][c];
+            bool isPressed = (key != 'X') && isKeyPressed(key);
+            Serial.printf("[%c:%s] ", key, isPressed ? "ON" : "  ");
+        }
+        Serial.println();
+    }
+    Serial.println("----------------------------\n");
+}
+
+void KeyHandler::diagnostics() {
+    static unsigned long lastDiagTime = 0;
+    const unsigned long diagInterval = 5000; // Every 5 seconds
+    
+    unsigned long now = millis();
+    if (now - lastDiagTime >= diagInterval) {
+        lastDiagTime = now;
+        printKeyboardState();
     }
 }
