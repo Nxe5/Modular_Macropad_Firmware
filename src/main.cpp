@@ -9,6 +9,8 @@
 #include "LEDHandler.h"
 #include "ConfigManager.h"
 #include "KeyHandler.h"
+#include "HIDHandler.h"
+#include <tusb.h> 
 
 //  Will be moved to info.json
 #define ROW0 3  // Kept (safe GPIO pin)
@@ -21,6 +23,10 @@
 #define COL2 13 // Kept (safe GPIO pin)
 #define COL3 6  // Kept (safe GPIO pin)
 #define COL4 12 // Kept (safe GPIO pin)
+
+// Global static variable to cache encoder actions (loaded once)
+static std::map<String, ActionConfig> encoderActions;
+static bool encoderActionsLoaded = false;
 
 void directKeyboardScan() {
   uint8_t rowPins[5] = {ROW0, ROW1, ROW2, ROW3, ROW4};
@@ -467,10 +473,11 @@ void safeButtonTest() {
   delay(1000);
 }
 
+// Modified initializeEncoderHandler remains as before
 void initializeEncoderHandler() {
     // Read components JSON from the file
     String componentsJson = ConfigManager::readFile("/config/components.json");
-    Serial.println("Loading components from JSON...");
+    Serial.println("Loading components from JSON for encoders...");
     
     // Parse the components to get encoder configurations
     std::vector<Component> components = ConfigManager::loadComponents("/config/components.json");
@@ -493,10 +500,9 @@ void initializeEncoderHandler() {
         uint8_t encoderIndex = 0;
         for (const Component& comp : components) {
             if (comp.type == "encoder") {
-                // Parse the JSON to extract encoder-specific configuration
+                // Use a larger capacity for JSON parsing here
                 DynamicJsonDocument doc(8192);
                 DeserializationError error = deserializeJson(doc, componentsJson);
-                
                 if (error) {
                     Serial.printf("Error parsing components JSON: %s\n", error.c_str());
                     continue;
@@ -505,7 +511,6 @@ void initializeEncoderHandler() {
                 // Find this encoder in the parsed JSON
                 JsonArray jsonComponents = doc["components"].as<JsonArray>();
                 JsonObject encoderConfig;
-                
                 for (JsonObject component : jsonComponents) {
                     if (component["id"].as<String>() == comp.id) {
                         encoderConfig = component;
@@ -514,7 +519,7 @@ void initializeEncoderHandler() {
                 }
                 
                 if (!encoderConfig.isNull()) {
-                    // Determine encoder type
+                    // Determine encoder type (default mechanical unless configured as as5600)
                     EncoderType type = ENCODER_TYPE_MECHANICAL;
                     if (encoderConfig.containsKey("configuration") && 
                         encoderConfig["configuration"].containsKey("type") &&
@@ -587,8 +592,8 @@ bool testI2CPins(uint8_t sdaPin, uint8_t sclPin) {
 }
 
 unsigned long previousMillis = 0;
-const long interval = 10000; // 10 seconds heartbeat
-
+const long heartbeatInterval = 10000; // 10 seconds heartbeat
+const long interval = 10000; // Define interval for heartbeat
 void setup() {
   // Start serial communication
   Serial.begin(115200);
@@ -597,7 +602,6 @@ void setup() {
   // Mount SPIFFS with error handling
   if (!SPIFFS.begin(false)) {
     Serial.println("SPIFFS mount failed!");
-    // Attempt to format if desired
     if (SPIFFS.format()) {
       Serial.println("SPIFFS formatted successfully");
       if (!SPIFFS.begin(false)) {
@@ -612,10 +616,10 @@ void setup() {
     Serial.println("SPIFFS mounted successfully.");
   }
   
-  // Optionally list files in SPIFFS for debugging.
+  // List files for debugging
   listDir(SPIFFS, "/", 0);
   
-  // Initialize module-specific setups.
+  // Initialize module-specific setups
   Serial.println("Initializing module info...");
   initializeModuleInfo();
   
@@ -627,44 +631,120 @@ void setup() {
 
   Serial.println("Initializing encoder handler...");
   initializeEncoderHandler();
+
+  // Initialize HID handler (this function should be defined only in HIDHandler.cpp)
+  Serial.println("Initializing HID handler...");
+  initializeHIDHandler();
+
+  // Wait until the HID interface is ready (with a timeout)
+  unsigned long start = millis();
+  while (!tud_hid_ready() && (millis() - start < 5000)) {
+      delay(10);
+  }
+  if (tud_hid_ready()) {
+      Serial.println("HID interface is now ready.");
+  } else {
+      Serial.println("HID interface not ready after timeout.");
+  }
   
-  // Test various I2C pin combinations
+  // Test various I2C pin combinations (for debugging AS5600 encoder if needed)
   Serial.println("\n=== Testing I2C Pin Combinations ===");
-  testI2CPins(17, 18); // Test pins 17, 18
-  testI2CPins(35, 36); // Test pins 35, 36
-  
+  testI2CPins(17, 18); // Example test: pins 17, 18
+  testI2CPins(35, 36); // Example test: pins 35, 36
 
   delay(3000);
   Serial.println("Initialization complete!");
-
-  // setAllColumnsLow();  // Test if columns can be driven LOW
-  // Serial.println("Setting all columns LOW for testing!");
 }
 
 void loop() {
   unsigned long currentMillis = millis();
   
-  // Non-blocking heartbeat.
-  if (currentMillis - previousMillis >= interval) {
+  // Heartbeat every 10 seconds
+  static unsigned long previousMillis = 0;
+  const long heartbeatInterval = 10000;
+  if (currentMillis - previousMillis >= heartbeatInterval) {
     Serial.println("Heartbeat..");
     previousMillis = currentMillis;
   }
   
-  // safeButtonTest(); // Test a single key press
-
-  // Replaced keyHandler->updateKeys() with the custom handler
-  // Esp32 was having issues reading .7v as LOW at 5v pwr
-  // customKeyHandler();
-  
-  // Diagnostic visualization
+  // Update key handler
   if (keyHandler) {
-    keyHandler->updateKeys(); // using custom handler instead 
-    keyHandler->diagnostics(); // Print key state every 5 seconds
+    keyHandler->updateKeys();
+    keyHandler->diagnostics();
   }
+  
+// Update encoder handler and check encoder changes
+if (encoderHandler) {
+    encoderHandler->updateEncoders();
+    encoderHandler->diagnostics();
+    
+    // Example for a single encoder at index 0:
+    long delta = encoderHandler->getEncoderChange(0);
+    if (delta != 0) {
+        // Retrieve HID action for the encoder from your actions JSON (should be loaded in your configuration)
+        // For this example, we assume the encoder action is stored under "encoder-1"
+        // and that the JSON contains "clockwise" and "counterclockwise" arrays.
+        static std::map<String, ActionConfig> encoderActions = ConfigManager::loadActions("/config/actions.json");
+        if (encoderActions.find("encoder-1") != encoderActions.end()) {
+            ActionConfig encAction = encoderActions["encoder-1"];
+            uint8_t report[8] = {0};
+            bool wasReportSent = false;
+            
+            // Detailed debug information about encoder change
+            Serial.printf("Encoder delta: %ld\n", delta);
+            
+            // If turning clockwise (delta negative), use the "clockwise" HID report
+            if (delta < 0 && !encAction.clockwise.empty()) {
+                Serial.println("Encoder turned CLOCKWISE");
+                Serial.print("Clockwise HID Report: ");
+                for (const auto& hexStr : encAction.clockwise) {
+                    Serial.printf("%s ", hexStr.c_str());
+                }
+                Serial.println();
+                
+                if (HIDHandler::hexReportToBinary(encAction.clockwise, report, 8)) {
+                    Serial.print("Converted Clockwise Report: ");
+                    for (int i = 0; i < 8; i++) {
+                        Serial.printf("%02X ", report[i]);
+                    }
+                    Serial.println();
+                    
+                    if (hidHandler) {
+                        wasReportSent = hidHandler->sendKeyboardReport(report);
+                        Serial.printf("Clockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
+                    }
+                }
+            }
+            // If turning counterclockwise (delta positive), use the "counterclockwise" HID report
+            else if (delta > 0 && !encAction.counterclockwise.empty()) {
+                Serial.println("Encoder turned COUNTERCLOCKWISE");
+                Serial.print("Counterclockwise HID Report: ");
+                for (const auto& hexStr : encAction.counterclockwise) {
+                    Serial.printf("%s ", hexStr.c_str());
+                }
+                Serial.println();
+                
+                if (HIDHandler::hexReportToBinary(encAction.counterclockwise, report, 8)) {
+                    Serial.print("Converted Counterclockwise Report: ");
+                    for (int i = 0; i < 8; i++) {
+                        Serial.printf("%02X ", report[i]);
+                    }
+                    Serial.println();
+                    
+                    if (hidHandler) {
+                        wasReportSent = hidHandler->sendKeyboardReport(report);
+                        Serial.printf("Counterclockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
+                    }
+                }
+            }
+        }
+    }
+}
 
-    // Update and check encoders
-  if (encoderHandler) {
-      encoderHandler->updateEncoders();
-      encoderHandler->diagnostics(); // This will print encoder state every 5 seconds
+  // Update HID handler
+  if (hidHandler) {
+      hidHandler->update();
   }
+  
+  delay(5); // Small delay to ease CPU usage
 }

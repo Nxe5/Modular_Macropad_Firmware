@@ -7,6 +7,9 @@
 #include <map>
 #include <vector>
 
+// Declare the external function from ModuleSetup.cpp
+extern String readJsonFile(const char* filePath);
+
 struct Component {
   String id;
   String type;
@@ -34,8 +37,7 @@ public:
     // Reads and parses components.json
     static std::vector<Component> loadComponents(const char* filePath);
     // Reads and parses actions.json and returns a mapping from button id to ActionConfig
-    static std::map<String, ActionConfig> loadActions(const char* filePath);
-    // Add this method to the public section
+    static std::map<String, ActionConfig> loadActions(const String& filePath);    
     static String readFile(const char* filePath);
     
 };

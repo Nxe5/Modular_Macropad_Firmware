@@ -1,6 +1,8 @@
 // KeyHandler.cpp
 
 #include "KeyHandler.h"
+#include "HIDHandler.h"
+#include "ConfigManager.h"
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 
@@ -154,6 +156,94 @@ char KeyHandler::getKey() {
     return (key == 'X') ? NO_KEY : key;
 }
 
+void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
+    if (keyIndex >= getTotalKeys() || !actionMap) {
+        return;
+    }
+    
+    const KeyConfig& config = actionMap[keyIndex];
+    
+    // Debug information
+    Serial.printf("Executing action for key %d, type=%d, action=%s\n", 
+                  keyIndex, config.type, 
+                  action == KEY_PRESS ? "PRESS" : "RELEASE");
+    
+    // Process based on action type and key action (press/release)
+    switch (config.type) {
+        case ACTION_HID:
+            if (action == KEY_PRESS) {
+                // Debug print the full HID report 
+                Serial.print("HID Report (Press): ");
+                for (int i = 0; i < 8; i++) {
+                    Serial.printf("%02X ", config.hidReport[i]);
+                }
+                Serial.println();
+
+                // For key press, send the configured HID report
+                if (hidHandler) {
+                    hidHandler->sendKeyboardReport(config.hidReport);
+                }
+            } else if (action == KEY_RELEASE) {
+                Serial.println("HID Report (Release): Sending empty keyboard report");
+                
+                // For key release, send an empty report to release keys
+                if (hidHandler) {
+                    hidHandler->sendEmptyKeyboardReport();
+                }
+            }
+            break;
+            
+        case ACTION_MULTIMEDIA:
+            if (action == KEY_PRESS) {
+                // Debug print the full consumer report
+                Serial.print("Consumer Report (Press): ");
+                for (int i = 0; i < 4; i++) {
+                    Serial.printf("%02X ", config.consumerReport[i]);
+                }
+                Serial.println();
+
+                // For key press, send the configured consumer report
+                if (hidHandler) {
+                    hidHandler->sendConsumerReport(config.consumerReport);
+                }
+            } else if (action == KEY_RELEASE) {
+                Serial.println("Consumer Report (Release): Sending empty consumer report");
+                
+                // For key release, send an empty report to release controls
+                if (hidHandler) {
+                    hidHandler->sendEmptyConsumerReport();
+                }
+            }
+            break;
+            
+        case ACTION_MACRO:
+            if (action == KEY_PRESS && !config.macroId.isEmpty()) {
+                // Only execute macro on key press
+                Serial.printf("Executing macro: %s\n", config.macroId.c_str());
+                
+                if (hidHandler) {
+                    hidHandler->executeMacro(config.macroId.c_str());
+                }
+            }
+            break;
+            
+        case ACTION_LAYER:
+            // Layer switching would be handled by your layer management logic
+            if (action == KEY_PRESS && !config.targetLayer.isEmpty()) {
+                Serial.printf("Switching to layer: %s\n", config.targetLayer.c_str());
+                // Call your layer switching function here
+                // switchToLayer(config.targetLayer);
+            }
+            break;
+            
+        case ACTION_NONE:
+        default:
+            // No action configured or unknown action type
+            Serial.printf("No action configured for key %d\n", keyIndex);
+            break;
+    }
+}
+
 bool KeyHandler::isKeyPressed(char key) {
     if (!keypad) return false;
     return keypad->isPressed(key) && key != 'X';
@@ -170,6 +260,9 @@ uint8_t KeyHandler::getTotalKeys() {
     }
     return count;
 }
+
+// Updated method for KeyHandler class to properly handle different JSON formats
+// Add this to your KeyHandler.cpp file
 
 void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& actions) {
     uint8_t totalKeys = getTotalKeys();
@@ -190,24 +283,63 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
                 
                 if (ac.type == "hid") {
                     actionMap[i].type = ACTION_HID;
-                    // Convert hex strings to byte values
-                    if (ac.hidReport.size() >= 8) {
-                        for (int j = 0; j < 8; j++) {
-                            actionMap[i].hidReport[j] = strtol(ac.hidReport[j].c_str() + 2, NULL, 16);
+                    
+                    // Build the HID report from the parsed action
+                    uint8_t hidReport[8] = {0};
+                    
+                    // First try to convert directly from our vector of hex strings
+                    if (!ac.hidReport.empty()) {
+                        if (HIDHandler::hexReportToBinary(ac.hidReport, hidReport, 8)) {
+                            // Copy to our action map
+                            memcpy(actionMap[i].hidReport, hidReport, 8);
+                            
+                            // Debug output
+                            Serial.printf("HID report for %s: ", buttonId.c_str());
+                            for (int j = 0; j < 8; j++) {
+                                Serial.printf("%02X ", actionMap[i].hidReport[j]);
+                            }
+                            Serial.println();
+                        } else {
+                            Serial.printf("Failed to convert HID report for %s\n", buttonId.c_str());
                         }
+                    } else {
+                        Serial.printf("No HID report data for %s\n", buttonId.c_str());
+                    }
+                }
+                else if (ac.type == "multimedia") {
+                    actionMap[i].type = ACTION_MULTIMEDIA;
+                    
+                    // Similar conversion for consumer report
+                    uint8_t consumerReport[4] = {0};
+                    
+                    if (!ac.consumerReport.empty()) {
+                        if (HIDHandler::hexReportToBinary(ac.consumerReport, consumerReport, 4)) {
+                            memcpy(actionMap[i].consumerReport, consumerReport, 4);
+                            
+                            // Debug output
+                            Serial.printf("Consumer report for %s: ", buttonId.c_str());
+                            for (int j = 0; j < 4; j++) {
+                                Serial.printf("%02X ", actionMap[i].consumerReport[j]);
+                            }
+                            Serial.println();
+                        } else {
+                            Serial.printf("Failed to convert Consumer report for %s\n", buttonId.c_str());
+                        }
+                    } else {
+                        Serial.printf("No Consumer report data for %s\n", buttonId.c_str());
                     }
                 }
                 else if (ac.type == "macro") {
                     actionMap[i].type = ACTION_MACRO;
                     actionMap[i].macroId = ac.macroId;
+                    Serial.printf("Set macro ID for %s: %s\n", 
+                                  buttonId.c_str(), actionMap[i].macroId.c_str());
                 }
                 else if (ac.type == "layer") {
                     actionMap[i].type = ACTION_LAYER;
                     actionMap[i].targetLayer = ac.targetLayer;
-                }
-                else if (ac.type == "multimedia") {
-                    actionMap[i].type = ACTION_MULTIMEDIA;
-                    // Similar conversion for consumerReport if needed
+                    Serial.printf("Set target layer for %s: %s\n", 
+                                  buttonId.c_str(), actionMap[i].targetLayer.c_str());
                 }
             }
         } 
@@ -219,6 +351,7 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
     
     Serial.println("Key configuration loaded successfully");
 }
+
 void KeyHandler::updateKeys() {
     // Use a reversed scanning method that works well with diode–protected keys.
     static unsigned long lastScan = 0;
@@ -358,56 +491,6 @@ void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
     if (lastAction[keyIndex] != action) {
         lastAction[keyIndex] = action;
         executeAction(keyIndex, action);
-    }
-}
-
-void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
-    // Null check for safety
-    if (keyIndex >= getTotalKeys()) {
-        Serial.printf("Invalid key index for action: %d\n", keyIndex);
-        return;
-    }
-    
-    KeyConfig& config = actionMap[keyIndex];
-    
-    Serial.printf("Executing action for key index %d (Type: %d, Action: %d)\n", 
-                 keyIndex, config.type, action);
-    
-    switch (config.type) {
-        case ACTION_HID:
-            if (action == KEY_PRESS) {
-                Serial.print("HID report: ");
-                for (int i = 0; i < 8; i++) {
-                    Serial.printf("%02X ", config.hidReport[i]);
-                }
-                Serial.println();
-                // TODO: Send the HID report via USB/BLE
-            } else {
-                Serial.printf("HID key released\n");
-                // TODO: Send a release HID report (zeroed)
-            }
-            break;
-        case ACTION_MACRO:
-            if (action == KEY_PRESS) {
-                Serial.printf("Trigger macro: %s\n", config.macroId.c_str());
-                // TODO: Execute macro
-            }
-            break;
-        case ACTION_LAYER:
-            if (action == KEY_PRESS) {
-                Serial.printf("Change layer to: %s\n", config.targetLayer.c_str());
-                // TODO: Switch layer configuration
-            }
-            break;
-        case ACTION_MULTIMEDIA:
-            if (action == KEY_PRESS) {
-                Serial.printf("Multimedia action triggered\n");
-                // TODO: Send consumer control report
-            }
-            break;
-        default:
-            Serial.printf("No action mapped for key index %d\n", keyIndex);
-            break;
     }
 }
 

@@ -43,60 +43,123 @@ std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
     return components;
 }
 
-std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) {
+std::map<String, ActionConfig> ConfigManager::loadActions(const String &filePath) {
     std::map<String, ActionConfig> actions;
-    String jsonStr = readFile(filePath);
-    if (jsonStr.isEmpty()) return actions;
     
-    DynamicJsonDocument doc(16384);
-    DeserializationError error = deserializeJson(doc, jsonStr);
-    if (error) {
-        Serial.printf("Error parsing %s: %s\n", filePath, error.c_str());
+    // Use the readJsonFile function from ModuleSetup.cpp
+    String jsonContent = readJsonFile(filePath.c_str());
+    if (jsonContent.isEmpty()) {
+        Serial.printf("Could not read file: %s\n", filePath.c_str());
         return actions;
     }
     
-    JsonObject layerConfig = doc["actions"]["layer-config"].as<JsonObject>();
-    for (JsonPair kv : layerConfig) {
-        ActionConfig ac;
-        ac.id = String(kv.key().c_str());
-        JsonObject cfg = kv.value().as<JsonObject>();
-        ac.type = cfg["type"].as<String>();
-        
-        // For HID actions, parse the report (support nested arrays)
-        if (ac.type == "hid") {
-            JsonVariant buttonPressVar = cfg["buttonPress"];
-            if (buttonPressVar.is<JsonArray>() && buttonPressVar[0].is<JsonArray>()) {
-                JsonArray report = buttonPressVar[0].as<JsonArray>();
-                for (JsonVariant v : report)
-                    ac.hidReport.push_back(v.as<String>());
-            } else {
-                JsonArray report = buttonPressVar.as<JsonArray>();
-                for (JsonVariant v : report)
-                    ac.hidReport.push_back(v.as<String>());
-            }
-            // Handle encoder extra keys if needed
-            if (cfg.containsKey("clockwise")) {
-                for (JsonVariant v : cfg["clockwise"].as<JsonArray>())
-                    ac.clockwise.push_back(v.as<String>());
-            }
-            if (cfg.containsKey("counterclockwise")) {
-                for (JsonVariant v : cfg["counterclockwise"].as<JsonArray>())
-                    ac.counterclockwise.push_back(v.as<String>());
-            }
-        }
-        else if (ac.type == "macro") {
-            ac.macroId = cfg["macroId"].as<String>();
-        }
-        else if (ac.type == "layer") {
-            ac.targetLayer = cfg["layerId"].as<String>();
-        }
-        else if (ac.type == "multimedia") {
-            JsonArray report = cfg["consumerReport"].as<JsonArray>();
-            for (JsonVariant v : report)
-                ac.consumerReport.push_back(v.as<String>());
-        }
-        
-        actions[ac.id] = ac;
+    
+    // Parse JSON
+    DynamicJsonDocument doc(16384); // Increased size to handle larger files
+    DeserializationError error = deserializeJson(doc, jsonContent);
+    
+    if (error) {
+        Serial.printf("Error parsing JSON: %s\n", error.c_str());
+        return actions;
     }
+    
+    // Extract layer config
+    if (!doc.containsKey("actions") || 
+        !doc["actions"].containsKey("layer-config")) {
+        Serial.println("Invalid actions.json format: missing actions or layer-config");
+        return actions;
+    }
+    
+    JsonObject layerConfig = doc["actions"]["layer-config"];
+    
+    // Process each button configuration
+    for (JsonPair kv : layerConfig) {
+        String buttonId = kv.key().c_str();
+        JsonObject buttonConfig = kv.value();
+        
+        ActionConfig action;
+        action.type = buttonConfig["type"].as<String>();
+        
+        // Debug
+        Serial.printf("Loading action for %s, type: %s\n", buttonId.c_str(), action.type.c_str());
+        
+        if (action.type == "hid") {
+            // Check if buttonPress exists
+            if (buttonConfig.containsKey("buttonPress")) {
+                JsonVariant buttonPress = buttonConfig["buttonPress"];
+                
+                // Handle both array formats
+                if (buttonPress.is<JsonArray>()) {
+                    JsonArray pressArray = buttonPress.as<JsonArray>();
+                    
+                    // Check if we have a nested array format [["0x00", "0x01", ...]]
+                    if (pressArray.size() > 0 && pressArray[0].is<JsonArray>()) {
+                        // Handle nested array format
+                        JsonArray innerArray = pressArray[0].as<JsonArray>();
+                        
+                        action.hidReport.clear();
+                        for (size_t i = 0; i < innerArray.size() && i < 8; i++) {
+                            action.hidReport.push_back(innerArray[i].as<String>());
+                        }
+                    } 
+                    else {
+                        // Handle flat array format ["0x00", "0x01", ...]
+                        action.hidReport.clear();
+                        for (size_t i = 0; i < pressArray.size() && i < 8; i++) {
+                            action.hidReport.push_back(pressArray[i].as<String>());
+                        }
+                    }
+                    
+                    Serial.printf("Loaded HID report with %d bytes for %s\n", 
+                                 action.hidReport.size(), buttonId.c_str());
+                }
+            }
+        }
+        else if (action.type == "multimedia") {
+            // Similar processing for multimedia reports
+            if (buttonConfig.containsKey("consumerReport")) {
+                JsonVariant consumerReport = buttonConfig["consumerReport"];
+                
+                if (consumerReport.is<JsonArray>()) {
+                    JsonArray reportArray = consumerReport.as<JsonArray>();
+                    
+                    // Check if we have nested array
+                    if (reportArray.size() > 0 && reportArray[0].is<JsonArray>()) {
+                        JsonArray innerArray = reportArray[0].as<JsonArray>();
+                        
+                        action.consumerReport.clear();
+                        for (size_t i = 0; i < innerArray.size() && i < 4; i++) {
+                            action.consumerReport.push_back(innerArray[i].as<String>());
+                        }
+                    } 
+                    else {
+                        // Handle flat array format
+                        action.consumerReport.clear();
+                        for (size_t i = 0; i < reportArray.size() && i < 4; i++) {
+                            action.consumerReport.push_back(reportArray[i].as<String>());
+                        }
+                    }
+                    
+                    Serial.printf("Loaded Consumer report with %d bytes for %s\n", 
+                                 action.consumerReport.size(), buttonId.c_str());
+                }
+            }
+        }
+        else if (action.type == "macro") {
+            action.macroId = buttonConfig["macroId"].as<String>();
+            Serial.printf("Loaded macro ID: %s for %s\n", 
+                         action.macroId.c_str(), buttonId.c_str());
+        }
+        else if (action.type == "layer") {
+            action.targetLayer = buttonConfig["targetLayer"].as<String>();
+            Serial.printf("Loaded target layer: %s for %s\n", 
+                         action.targetLayer.c_str(), buttonId.c_str());
+        }
+        
+        // Store the action configuration
+        actions[buttonId] = action;
+    }
+    
+    Serial.printf("Loaded %d button actions successfully\n", actions.size());
     return actions;
 }
