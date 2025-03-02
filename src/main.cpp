@@ -559,6 +559,33 @@ void initializeEncoderHandler() {
         Serial.println("No encoders found in configuration");
     }
 }
+
+bool testI2CPins(uint8_t sdaPin, uint8_t sclPin) {
+    // End any previous I2C communication
+    Wire.end();
+    
+    // Try to initialize I2C on the specified pins
+    Wire.begin(sdaPin, sclPin);
+    
+    // Attempt an I2C scan (this won't find anything but tests if pins can be configured)
+    Wire.beginTransmission(0x36); // AS5600 address
+    uint8_t error = Wire.endTransmission();
+    
+    // We expect error 2 (received NACK on transmit of address) if no device is present
+    // but pins can be used for I2C. Any other error might indicate pin configuration problems.
+    Serial.printf("Testing I2C pins SDA=%d, SCL=%d: ", sdaPin, sclPin);
+    if (error == 2) {
+        Serial.println("Pins can be used for I2C (no device found, as expected)");
+        return true;
+    } else if (error == 0) {
+        Serial.println("Unexpectedly received ACK - is a device connected?");
+        return true; // Pins are working
+    } else {
+        Serial.printf("Error %d - pins might not be usable for I2C\n", error);
+        return false;
+    }
+}
+
 unsigned long previousMillis = 0;
 const long interval = 10000; // 10 seconds heartbeat
 
@@ -601,6 +628,12 @@ void setup() {
   Serial.println("Initializing encoder handler...");
   initializeEncoderHandler();
   
+  // Test various I2C pin combinations
+  Serial.println("\n=== Testing I2C Pin Combinations ===");
+  testI2CPins(17, 18); // Test pins 17, 18
+  testI2CPins(35, 36); // Test pins 35, 36
+  
+
   delay(3000);
   Serial.println("Initialization complete!");
 
