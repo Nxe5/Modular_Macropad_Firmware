@@ -79,13 +79,20 @@ HIDHandler::~HIDHandler() {
 
 bool HIDHandler::begin() {
     Serial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
-    tusb_init(); // Initialize the TinyUSB stack
+    
+    // Wait for USB to be ready with a timeout
     unsigned long startTime = millis();
-    while (!Serial && (millis() - startTime < 5000)) {
+    while (!tud_mounted() && (millis() - startTime < 5000)) {
         delay(10);
     }
-    Serial.println("USB device mounted successfully");
-    return true;
+    
+    if (tud_mounted()) {
+        Serial.println("USB device mounted successfully");
+        return true;
+    } else {
+        Serial.println("USB device not mounted after timeout");
+        return false;
+    }
 }
 
 bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {

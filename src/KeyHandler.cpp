@@ -163,58 +163,37 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
     
     const KeyConfig& config = actionMap[keyIndex];
     
-    // Debug information
-    Serial.printf("Executing action for key %d, type=%d, action=%s\n", 
+    // Enhanced debug information
+    Serial.printf("KeyHandler: Executing action for key %d, type=%d (%s), action=%s\n", 
                   keyIndex, config.type, 
+                  config.type == ACTION_HID ? "HID" : 
+                  config.type == ACTION_MULTIMEDIA ? "MULTIMEDIA" : 
+                  config.type == ACTION_MACRO ? "MACRO" : 
+                  config.type == ACTION_LAYER ? "LAYER" : "UNKNOWN",
                   action == KEY_PRESS ? "PRESS" : "RELEASE");
     
     // Process based on action type and key action (press/release)
     switch (config.type) {
-        case ACTION_HID:
-            if (action == KEY_PRESS) {
-                // Debug print the full HID report 
-                Serial.print("HID Report (Press): ");
-                for (int i = 0; i < 8; i++) {
-                    Serial.printf("%02X ", config.hidReport[i]);
-                }
-                Serial.println();
-
-                // For key press, send the configured HID report
-                if (hidHandler) {
-                    hidHandler->sendKeyboardReport(config.hidReport);
-                }
-            } else if (action == KEY_RELEASE) {
-                Serial.println("HID Report (Release): Sending empty keyboard report");
-                
-                // For key release, send an empty report to release keys
-                if (hidHandler) {
-                    hidHandler->sendEmptyKeyboardReport();
-                }
-            }
-            break;
-            
+        // ... existing code ...
+        
         case ACTION_MULTIMEDIA:
             if (action == KEY_PRESS) {
-                // Debug print the full consumer report
-                Serial.print("Consumer Report (Press): ");
+                // More detailed debugging
+                Serial.print("Multimedia Report (Press): ");
                 for (int i = 0; i < 4; i++) {
                     Serial.printf("%02X ", config.consumerReport[i]);
                 }
                 Serial.println();
+                Serial.println("Sending to HIDHandler::sendConsumerReport...");
 
                 // For key press, send the configured consumer report
                 if (hidHandler) {
-                    hidHandler->sendConsumerReport(config.consumerReport);
-                }
-            } else if (action == KEY_RELEASE) {
-                Serial.println("Consumer Report (Release): Sending empty consumer report");
-                
-                // For key release, send an empty report to release controls
-                if (hidHandler) {
-                    hidHandler->sendEmptyConsumerReport();
+                    bool sent = hidHandler->sendConsumerReport(config.consumerReport);
+                    Serial.printf("Consumer report sent: %s\n", sent ? "SUCCESS" : "FAILED");
+                } else {
+                    Serial.println("ERROR: hidHandler is NULL!");
                 }
             }
-            break;
             
         case ACTION_MACRO:
             if (action == KEY_PRESS && !config.macroId.isEmpty()) {
@@ -243,6 +222,7 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             break;
     }
 }
+
 
 bool KeyHandler::isKeyPressed(char key) {
     if (!keypad) return false;

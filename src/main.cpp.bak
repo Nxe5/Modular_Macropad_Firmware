@@ -1,7 +1,6 @@
 #include "FS.h"
 #include "SPIFFS.h"
 #include "ArduinoJson.h"
-#include "USB.h"
 
 // Include your project modules
 #include "ModuleSetup.h"
@@ -297,27 +296,6 @@ void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t
     Serial.println("Pin configuration complete\n");
 }
 
-// Function to debug actions configuration
-void debugActionsConfig() {
-    auto actions = ConfigManager::loadActions("/config/actions.json");
-    
-    Serial.println("\n=== Actions Configuration Debug ===");
-    for (const auto& pair : actions) {
-        Serial.printf("Button ID: %s, Type: %s\n", 
-                    pair.first.c_str(), 
-                    pair.second.type.c_str());
-        
-        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
-            Serial.print("  Consumer Report: ");
-            for (const auto& hex : pair.second.consumerReport) {
-                Serial.printf("%s ", hex.c_str());
-            }
-            Serial.println();
-        }
-    }
-    Serial.println("==================================\n");
-}
-
 // initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
 void initializeKeyHandler() {
   const uint8_t rows = 5;
@@ -361,9 +339,6 @@ void initializeKeyHandler() {
     Serial.println("Loading key action configuration...");
     auto actions = ConfigManager::loadActions("/config/actions.json");
     keyHandler->loadKeyConfiguration(actions);
-    
-    // Debug the loaded actions configuration
-    debugActionsConfig();
     
     Serial.println("Key handler initialization complete");
   } else {
@@ -616,250 +591,185 @@ bool testI2CPins(uint8_t sdaPin, uint8_t sclPin) {
     }
 }
 
-// Ensure USB pins are clear for USB operation
-void prepareUsbPins() {
-    // ESP32-S3 USB pins
-    pinMode(19, INPUT);  // USB D-
-    pinMode(20, INPUT);  // USB D+
-    
-    // Clear any interference
-    digitalWrite(19, LOW);
-    digitalWrite(20, LOW);
-}
-
+unsigned long previousMillis = 0;
+const long heartbeatInterval = 10000; // 10 seconds heartbeat
+const long interval = 10000; // Define interval for heartbeat
 void setup() {
-    // Start serial communication with long timeout
-    Serial.begin(115200);
-    delay(3000);
-    Serial.println("\n\n=== Starting Device Initialization ===");
-    
-    // Prepare USB pins and initialize USB first
-    prepareUsbPins();
-    
-    Serial.println("Initializing USB...");
-    USB.begin();
-    delay(500);
-    
-    // Process USB tasks to help with enumeration
-    Serial.println("Processing initial USB tasks...");
-    for (int i = 0; i < 20; i++) {
-        tud_task();
-        delay(10);
-    }
-    
-    // Mount SPIFFS with error handling
-    if (!SPIFFS.begin(false)) {
-        Serial.println("SPIFFS mount failed!");
-        if (SPIFFS.format()) {
-            Serial.println("SPIFFS formatted successfully");
-            if (!SPIFFS.begin(false)) {
-                Serial.println("Failed to mount SPIFFS after formatting");
-                return;
-            }
-        } else {
-            Serial.println("SPIFFS format failed");
-            return;
-        }
+  // Start serial communication
+  Serial.begin(115200);
+  delay(10000);
+  
+  // Mount SPIFFS with error handling
+  if (!SPIFFS.begin(false)) {
+    Serial.println("SPIFFS mount failed!");
+    if (SPIFFS.format()) {
+      Serial.println("SPIFFS formatted successfully");
+      if (!SPIFFS.begin(false)) {
+        Serial.println("Failed to mount SPIFFS after formatting");
+        return;
+      }
     } else {
-        Serial.println("SPIFFS mounted successfully.");
+      Serial.println("SPIFFS format failed");
+      return;
     }
-    
-    // List files for debugging
-    listDir(SPIFFS, "/", 0);
-    
-    // Initialize module-specific setups
-    Serial.println("Initializing module info...");
-    initializeModuleInfo();
-    
-    Serial.println("Initializing LED handler...");
-    initializeLED();
-    
-    Serial.println("Initializing key handler...");
-    initializeKeyHandler();
-    
-    Serial.println("Initializing encoder handler...");
-    initializeEncoderHandler();
-    
-    // Process USB tasks again before HID initialization
-    for (int i = 0; i < 20; i++) {
-        tud_task();
-        delay(10);
-    }
-    
-    // Initialize HID handler with additional debug
-    Serial.println("Initializing HID handler...");
-    initializeHIDHandler();
-    
-    // Verify HID handler was created
-    if (hidHandler != nullptr) {
-        Serial.println("HID handler initialized successfully (pointer is valid)");
-    } else {
-        Serial.println("ERROR: HID handler is NULL after initialization!");
-        
-        // Try to re-create HID handler directly
-        Serial.println("Attempting to create HID handler directly...");
-        hidHandler = new HIDHandler();
-        if (hidHandler) {
-            hidHandler->begin();
-            Serial.println("HID handler created directly");
-        } else {
-            Serial.println("Failed to create HID handler directly!");
-        }
-    }
-    
-    // Process USB tasks more aggressively
-    Serial.println("Processing USB tasks...");
-    for (int i = 0; i < 100; i++) {
-        tud_task();
-        delay(10);
-    }
-    
-    // Wait until the HID interface is ready (with a timeout)
-    unsigned long start = millis();
-    while (!tud_hid_ready() && (millis() - start < 5000)) {
-        tud_task();  // Process USB tasks while waiting
-        delay(10);
-    }
-    
-    if (tud_hid_ready()) {
-        Serial.println("HID interface is now ready.");
-    } else {
-        Serial.println("HID interface not ready after timeout.");
-    }
-    
-    // Test various I2C pin combinations (for debugging AS5600 encoder if needed)
-    Serial.println("\n=== Testing I2C Pin Combinations ===");
-    testI2CPins(17, 18); // Example test: pins 17, 18
-    testI2CPins(35, 36); // Example test: pins 35, 36
-    
-    delay(1000);
-    Serial.println("Initialization complete!");
+  } else {
+    Serial.println("SPIFFS mounted successfully.");
+  }
+  
+  // List files for debugging
+  listDir(SPIFFS, "/", 0);
+  
+  // Initialize module-specific setups
+  Serial.println("Initializing module info...");
+  initializeModuleInfo();
+  
+  Serial.println("Initializing LED handler...");
+  initializeLED();
+  
+  Serial.println("Initializing key handler...");
+  initializeKeyHandler();
+
+  Serial.println("Initializing encoder handler...");
+  initializeEncoderHandler();
+
+  // Initialize HID handler with additional debug
+  Serial.println("Initializing HID handler...");
+  initializeHIDHandler();
+  
+  // Verify HID handler was created
+  if (hidHandler != nullptr) {
+      Serial.println("HID handler initialized successfully (pointer is valid)");
+  } else {
+      Serial.println("ERROR: HID handler is NULL after initialization!");
+  }
+
+  // Wait until the HID interface is ready (with a timeout)
+  unsigned long start = millis();
+  while (!tud_hid_ready() && (millis() - start < 8000)) {
+      delay(10);
+  }
+  if (tud_hid_ready()) {
+      Serial.println("HID interface is now ready.");
+  } else {
+      Serial.println("HID interface not ready after timeout.");
+  }
+  
+  // Test various I2C pin combinations (for debugging AS5600 encoder if needed)
+  Serial.println("\n=== Testing I2C Pin Combinations ===");
+  testI2CPins(17, 18); // Example test: pins 17, 18
+  testI2CPins(35, 36); // Example test: pins 35, 36
+
+  delay(3000);
+  Serial.println("Initialization complete!");
 }
 
 void loop() {
-    // Process USB tasks at the start of each loop iteration
-    tud_task();
+  unsigned long currentMillis = millis();
+  
+  // Heartbeat every 10 seconds
+  static unsigned long previousMillis = 0;
+  const long heartbeatInterval = 10000;
+  if (currentMillis - previousMillis >= heartbeatInterval) {
+    Serial.println("Heartbeat..");
+    previousMillis = currentMillis;
+  }
+  
+  // Update key handler
+  if (keyHandler) {
+    keyHandler->updateKeys();
+    keyHandler->diagnostics();
+  }
+  
+// Update encoder handler and check encoder changes
+if (encoderHandler) {
+    encoderHandler->updateEncoders();
+    encoderHandler->diagnostics();
     
-    unsigned long currentMillis = millis();
-    
-    // Heartbeat every 10 seconds
-    static unsigned long previousMillis = 0;
-    const long heartbeatInterval = 10000;
-    if (currentMillis - previousMillis >= heartbeatInterval) {
-        Serial.println("Heartbeat..");
-        previousMillis = currentMillis;
-    }
-    
-    // Update key handler
-    if (keyHandler) {
-        keyHandler->updateKeys();
-        keyHandler->diagnostics();
-    }
-    
-    // Update encoder handler and check encoder changes
-    if (encoderHandler) {
-        encoderHandler->updateEncoders();
-        encoderHandler->diagnostics();
-        
-        // Example for a single encoder at index 0:
-        long delta = encoderHandler->getEncoderChange(0);
-        if (delta != 0) {
-            // Retrieve HID action for the encoder from your actions JSON
-            if (!encoderActionsLoaded) {
-                encoderActions = ConfigManager::loadActions("/config/actions.json");
-                encoderActionsLoaded = true;
-            }
+    // Example for a single encoder at index 0:
+    long delta = encoderHandler->getEncoderChange(0);
+    if (delta != 0) {
+        // Retrieve HID action for the encoder from your actions JSON (should be loaded in your configuration)
+        // For this example, we assume the encoder action is stored under "encoder-1"
+        // and that the JSON contains "clockwise" and "counterclockwise" arrays.
+        static std::map<String, ActionConfig> encoderActions = ConfigManager::loadActions("/config/actions.json");
+        if (encoderActions.find("encoder-1") != encoderActions.end()) {
+            ActionConfig encAction = encoderActions["encoder-1"];
+            uint8_t report[8] = {0};
+            bool wasReportSent = false;
             
-            if (encoderActions.find("encoder-1") != encoderActions.end()) {
-                ActionConfig encAction = encoderActions["encoder-1"];
-                uint8_t report[8] = {0};
-                bool wasReportSent = false;
+            // Detailed debug information about encoder change
+            Serial.printf("Encoder delta: %ld\n", delta);
+            
+            // If turning clockwise (delta negative), use the "clockwise" HID report
+            if (delta < 0 && !encAction.clockwise.empty()) {
+                Serial.println("Encoder turned CLOCKWISE");
+                Serial.print("Clockwise HID Report: ");
+                for (const auto& hexStr : encAction.clockwise) {
+                    Serial.printf("%s ", hexStr.c_str());
+                }
+                Serial.println();
                 
-                // Detailed debug information about encoder change
-                Serial.printf("Encoder delta: %ld\n", delta);
-                
-                // If turning clockwise (delta negative), use the "clockwise" HID report
-                if (delta < 0 && !encAction.clockwise.empty()) {
-                    Serial.println("Encoder turned CLOCKWISE");
-                    Serial.print("Clockwise HID Report: ");
-                    for (const auto& hexStr : encAction.clockwise) {
-                        Serial.printf("%s ", hexStr.c_str());
+                if (HIDHandler::hexReportToBinary(encAction.clockwise, report, 8)) {
+                    Serial.print("Converted Clockwise Report: ");
+                    for (int i = 0; i < 8; i++) {
+                        Serial.printf("%02X ", report[i]);
                     }
                     Serial.println();
                     
-                    if (HIDHandler::hexReportToBinary(encAction.clockwise, report, 8)) {
-                        Serial.print("Converted Clockwise Report: ");
-                        for (int i = 0; i < 8; i++) {
-                            Serial.printf("%02X ", report[i]);
-                        }
-                        Serial.println();
-                        
-                        if (hidHandler) {
-                            wasReportSent = hidHandler->sendKeyboardReport(report);
-                            Serial.printf("Clockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
-                        }
-                        }
-               }
-               // If turning counterclockwise (delta positive), use the "counterclockwise" HID report
-               else if (delta > 0 && !encAction.counterclockwise.empty()) {
-                   Serial.println("Encoder turned COUNTERCLOCKWISE");
-                   Serial.print("Counterclockwise HID Report: ");
-                   for (const auto& hexStr : encAction.counterclockwise) {
-                       Serial.printf("%s ", hexStr.c_str());
-                   }
-                   Serial.println();
-                   
-                   if (HIDHandler::hexReportToBinary(encAction.counterclockwise, report, 8)) {
-                       Serial.print("Converted Counterclockwise Report: ");
-                       for (int i = 0; i < 8; i++) {
-                           Serial.printf("%02X ", report[i]);
-                       }
-                       Serial.println();
-                       
-                       if (hidHandler) {
-                           wasReportSent = hidHandler->sendKeyboardReport(report);
-                           Serial.printf("Counterclockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
-                       }
-                   }
-               }
-           }
-       }
-   }
+                    if (hidHandler) {
+                        wasReportSent = hidHandler->sendKeyboardReport(report);
+                        Serial.printf("Clockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
+                    }
+                }
+            }
+            // If turning counterclockwise (delta positive), use the "counterclockwise" HID report
+            else if (delta > 0 && !encAction.counterclockwise.empty()) {
+                Serial.println("Encoder turned COUNTERCLOCKWISE");
+                Serial.print("Counterclockwise HID Report: ");
+                for (const auto& hexStr : encAction.counterclockwise) {
+                    Serial.printf("%s ", hexStr.c_str());
+                }
+                Serial.println();
+                
+                if (HIDHandler::hexReportToBinary(encAction.counterclockwise, report, 8)) {
+                    Serial.print("Converted Counterclockwise Report: ");
+                    for (int i = 0; i < 8; i++) {
+                        Serial.printf("%02X ", report[i]);
+                    }
+                    Serial.println();
+                    
+                    if (hidHandler) {
+                        wasReportSent = hidHandler->sendKeyboardReport(report);
+                        Serial.printf("Counterclockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
+                    }
+                }
+            }
+        }
+    }
+}
 
-   // Update HID handler
-   if (hidHandler) {
-       hidHandler->update();
-   }
-
-   // Check USB status every 5 seconds
-   static unsigned long lastUsbCheck = 0;
-   if (currentMillis - lastUsbCheck >= 5000) {
-       lastUsbCheck = currentMillis;
-       
-       Serial.println("\n--- USB Status ---");
-       Serial.printf("USB Connected: %s\n", tud_mounted() ? "YES" : "NO");
-       Serial.printf("USB HID Ready: %s\n", tud_hid_ready() ? "YES" : "NO");
-       Serial.printf("USB CDC Ready: %s\n", tud_cdc_connected() ? "YES" : "NO");
-       Serial.printf("USB Interface Status: %s\n", (tud_ready()) ? "READY" : "NOT READY");
-       Serial.printf("HID Handler Pointer: %s\n", (hidHandler != nullptr) ? "VALID" : "NULL");
-       
-       // Try to re-initialize HID if needed
-       if (!tud_hid_ready() && hidHandler != nullptr) {
-           Serial.println("Trying to re-initialize HID...");
-           hidHandler->begin();
-       }
-   }
-    
-  if (strip) {
-      for (int i = 0; i < numLEDs; i++) {
-          strip->setPixelColor(i, strip->Color(
-              ledConfigs[i].r,
-              ledConfigs[i].g,
-              ledConfigs[i].b
-          ));
-      }
-      strip->show();
+  // Update HID handler
+  if (hidHandler) {
+      hidHandler->update();
   }
 
-   delay(5); // Small delay to ease CPU usage
+  // Process USB tasks
+  tud_task();
+
+    static unsigned long lastUsbCheck = 0;
+  
+  // Check USB status every 5 seconds
+  if (millis() - lastUsbCheck >= 5000) {
+      lastUsbCheck = millis();
+      
+      Serial.println("\n--- USB Status ---");
+      Serial.printf("USB Connected: %s\n", tud_mounted() ? "YES" : "NO");
+      Serial.printf("USB HID Ready: %s\n", tud_hid_ready() ? "YES" : "NO");
+      Serial.printf("USB CDC Ready: %s\n", tud_cdc_connected() ? "YES" : "NO");
+      
+      // Instead of trying to use tud_hid_n_report which is for sending reports:
+      Serial.printf("USB Interface Status: %s\n", (tud_ready()) ? "READY" : "NOT READY");
+  }
+  
+  delay(5); // Small delay to ease CPU usage
 }
