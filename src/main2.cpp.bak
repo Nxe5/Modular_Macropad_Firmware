@@ -1,17 +1,21 @@
-// main.cpp.bak
 #include "FS.h"
 #include "SPIFFS.h"
 #include "ArduinoJson.h"
+#include "USB.h"
+#include "USBCDC.h"  // Add CDC header
+#include "tusb_config.h"
 
 // Include your project modules
 #include "ModuleSetup.h"
-#include "DisplayHandler.h"
 #include "EncoderHandler.h"
 #include "LEDHandler.h"
 #include "ConfigManager.h"
 #include "KeyHandler.h"
 #include "HIDHandler.h"
 #include <tusb.h> 
+
+// Create CDC Serial instance
+USBCDC USBSerial;
 
 //  Will be moved to info.json
 #define ROW0 3  // Kept (safe GPIO pin)
@@ -24,6 +28,27 @@
 #define COL2 13 // Kept (safe GPIO pin)
 #define COL3 6  // Kept (safe GPIO pin)
 #define COL4 12 // Kept (safe GPIO pin)
+
+
+
+// Define a more comprehensive USB descriptor
+tusb_desc_device_t const desc_device = {
+    .bLength            = sizeof(tusb_desc_device_t),
+    .bDescriptorType    = TUSB_DESC_DEVICE,
+    .bcdUSB             = 0x0200,  // USB 2.0
+    .bDeviceClass       = 0x00,    // Defined by interface
+    .bDeviceSubClass    = 0x00,
+    .bDeviceProtocol    = 0x00,
+    .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor           = 0x1234,  // Replace with your actual Vendor ID
+    .idProduct          = 0x5678,  // Replace with your actual Product ID
+    .bcdDevice          = 0x0100,  // Device version 1.0
+    .iManufacturer      = 0x01,
+    .iProduct           = 0x02,
+    .iSerialNumber      = 0x03,
+    .bNumConfigurations = 0x01
+};
+
 
 // Global static variable to cache encoder actions (loaded once)
 static std::map<String, ActionConfig> encoderActions;
@@ -67,6 +92,121 @@ void directKeyboardScan() {
     
     // Allow time between columns
     delay(500);
+  }
+}
+
+// Command handling function for USB CDC console
+void handleCDCCommand(const String &command) {
+  if (command.startsWith("help")) {
+    USBSerial.println("Available commands:");
+    USBSerial.println("  help         - Show this help");
+    USBSerial.println("  status       - Show device status");
+    USBSerial.println("  led:on       - Turn all LEDs on (green)");
+    USBSerial.println("  led:off      - Turn all LEDs off");
+    USBSerial.println("  led:rgb R G B - Set all LEDs to RGB color (0-255)");
+    USBSerial.println("  led:set N R G B - Set LED N to RGB color");
+    USBSerial.println("  animation:start N - Start animation type N (0-3)");
+    USBSerial.println("  animation:stop - Stop animation");
+    USBSerial.println("  debug:keys   - Toggle key matrix debug");
+    USBSerial.println("  debug:encoders - Toggle encoder debug");
+  }
+  else if (command.startsWith("status")) {
+    USBSerial.println("NXE5 MacroPad Status:");
+    USBSerial.printf("- USB Connected: %s\n", tud_mounted() ? "Yes" : "No");
+    USBSerial.printf("- HID Ready: %s\n", tud_hid_ready() ? "Yes" : "No");
+    USBSerial.printf("- CDC Connected: %s\n", tud_cdc_connected() ? "Yes" : "No");
+    USBSerial.printf("- Key Matrix: %d buttons\n", currentModule.numButtons);
+    USBSerial.printf("- LEDs: %d available\n", numLEDs);
+    USBSerial.printf("- Encoders: %d configured\n", currentModule.numRotaryEncoders);
+    USBSerial.printf("- Animation Active: %s\n", animationActive ? "Yes" : "No");
+    USBSerial.printf("- Memory Free: %d bytes\n", ESP.getFreeHeap());
+  }
+  else if (command == "led:on") {
+    setAllLEDs(0, 255, 0);  // Green
+    USBSerial.println("All LEDs turned ON (green)");
+  }
+  else if (command == "led:off") {
+    clearAllLEDs();
+    USBSerial.println("All LEDs turned OFF");
+  }
+  else if (command.startsWith("led:rgb ")) {
+    // Parse RGB values: led:rgb 255 0 128
+    int r = 0, g = 0, b = 0;
+    if (sscanf(command.c_str(), "led:rgb %d %d %d", &r, &g, &b) == 3) {
+      // Constrain values to 0-255 range
+      r = constrain(r, 0, 255);
+      g = constrain(g, 0, 255);
+      b = constrain(b, 0, 255);
+      
+      setAllLEDs(r, g, b);
+      USBSerial.printf("All LEDs set to RGB(%d,%d,%d)\n", r, g, b);
+    } else {
+      USBSerial.println("Invalid RGB values. Format: led:rgb R G B");
+    }
+  }
+  else if (command.startsWith("led:set ")) {
+    // Parse LED index and RGB values: led:set 1 255 0 128
+    int index = 0, r = 0, g = 0, b = 0;
+    if (sscanf(command.c_str(), "led:set %d %d %d %d", &index, &r, &g, &b) == 4) {
+      // Check index bounds
+      if (index >= 0 && index < numLEDs) {
+        // Constrain values to 0-255 range
+        r = constrain(r, 0, 255);
+        g = constrain(g, 0, 255);
+        b = constrain(b, 0, 255);
+        
+        setLEDColor(index, r, g, b);
+        USBSerial.printf("LED %d set to RGB(%d,%d,%d)\n", index, r, g, b);
+      } else {
+        USBSerial.printf("Invalid LED index. Must be between 0 and %d\n", numLEDs - 1);
+      }
+    } else {
+      USBSerial.println("Invalid command format. Use: led:set INDEX R G B");
+    }
+  }
+  else if (command.startsWith("animation:start ")) {
+    // Parse animation type: animation:start 0
+    int type = 0;
+    if (sscanf(command.c_str(), "animation:start %d", &type) == 1) {
+      if (type >= 0 && type <= 3) {
+        startAnimation(type, 100);  // Start with default speed
+        USBSerial.printf("Started animation type %d\n", type);
+      } else {
+        USBSerial.println("Invalid animation type. Must be between 0 and 3");
+      }
+    } else {
+      USBSerial.println("Invalid command format. Use: animation:start TYPE");
+    }
+  }
+  else if (command == "animation:stop") {
+    stopAnimation();
+    USBSerial.println("Animation stopped");
+  }
+  else if (command == "debug:keys") {
+    static bool keyDebug = false;
+    keyDebug = !keyDebug;
+    
+    if (keyDebug && keyHandler) {
+      keyHandler->printKeyboardState();
+      USBSerial.println("Key matrix debug ON");
+    } else {
+      USBSerial.println("Key matrix debug OFF");
+    }
+  }
+  else if (command == "debug:encoders") {
+    static bool encoderDebug = false;
+    encoderDebug = !encoderDebug;
+    
+    if (encoderDebug && encoderHandler) {
+      encoderHandler->printEncoderStates();
+      USBSerial.println("Encoder debug ON");
+    } else {
+      USBSerial.println("Encoder debug OFF");
+    }
+  }
+  else {
+    USBSerial.printf("Unknown command: %s\n", command.c_str());
+    USBSerial.println("Type 'help' for available commands");
   }
 }
 
@@ -297,6 +437,27 @@ void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t
     Serial.println("Pin configuration complete\n");
 }
 
+// Function to debug actions configuration
+void debugActionsConfig() {
+    auto actions = ConfigManager::loadActions("/config/actions.json");
+    
+    Serial.println("\n=== Actions Configuration Debug ===");
+    for (const auto& pair : actions) {
+        Serial.printf("Button ID: %s, Type: %s\n", 
+                    pair.first.c_str(), 
+                    pair.second.type.c_str());
+        
+        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
+            Serial.print("  Consumer Report: ");
+            for (const auto& hex : pair.second.consumerReport) {
+                Serial.printf("%s ", hex.c_str());
+            }
+            Serial.println();
+        }
+    }
+    Serial.println("==================================\n");
+}
+
 // initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
 void initializeKeyHandler() {
   const uint8_t rows = 5;
@@ -340,6 +501,9 @@ void initializeKeyHandler() {
     Serial.println("Loading key action configuration...");
     auto actions = ConfigManager::loadActions("/config/actions.json");
     keyHandler->loadKeyConfiguration(actions);
+    
+    // Debug the loaded actions configuration
+    debugActionsConfig();
     
     Serial.println("Key handler initialization complete");
   } else {
@@ -592,185 +756,363 @@ bool testI2CPins(uint8_t sdaPin, uint8_t sclPin) {
     }
 }
 
-unsigned long previousMillis = 0;
-const long heartbeatInterval = 10000; // 10 seconds heartbeat
-const long interval = 10000; // Define interval for heartbeat
-void setup() {
-  // Start serial communication
-  Serial.begin(115200);
-  delay(10000);
-  
-  // Mount SPIFFS with error handling
-  if (!SPIFFS.begin(false)) {
-    Serial.println("SPIFFS mount failed!");
-    if (SPIFFS.format()) {
-      Serial.println("SPIFFS formatted successfully");
-      if (!SPIFFS.begin(false)) {
-        Serial.println("Failed to mount SPIFFS after formatting");
-        return;
-      }
-    } else {
-      Serial.println("SPIFFS format failed");
-      return;
-    }
-  } else {
-    Serial.println("SPIFFS mounted successfully.");
-  }
-  
-  // List files for debugging
-  listDir(SPIFFS, "/", 0);
-  
-  // Initialize module-specific setups
-  Serial.println("Initializing module info...");
-  initializeModuleInfo();
-  
-  Serial.println("Initializing LED handler...");
-  initializeLED();
-  
-  Serial.println("Initializing key handler...");
-  initializeKeyHandler();
-
-  Serial.println("Initializing encoder handler...");
-  initializeEncoderHandler();
-
-  // Initialize HID handler with additional debug
-  Serial.println("Initializing HID handler...");
-  initializeHIDHandler();
-  
-  // Verify HID handler was created
-  if (hidHandler != nullptr) {
-      Serial.println("HID handler initialized successfully (pointer is valid)");
-  } else {
-      Serial.println("ERROR: HID handler is NULL after initialization!");
-  }
-
-  // Wait until the HID interface is ready (with a timeout)
-  unsigned long start = millis();
-  while (!tud_hid_ready() && (millis() - start < 8000)) {
-      delay(10);
-  }
-  if (tud_hid_ready()) {
-      Serial.println("HID interface is now ready.");
-  } else {
-      Serial.println("HID interface not ready after timeout.");
-  }
-  
-  // Test various I2C pin combinations (for debugging AS5600 encoder if needed)
-  Serial.println("\n=== Testing I2C Pin Combinations ===");
-  testI2CPins(17, 18); // Example test: pins 17, 18
-  testI2CPins(35, 36); // Example test: pins 35, 36
-
-  delay(3000);
-  Serial.println("Initialization complete!");
+// Ensure USB pins are clear for USB operation
+void prepareUsbPins() {
+    // ESP32-S3 USB pins
+    pinMode(19, INPUT);  // USB D-
+    pinMode(20, INPUT);  // USB D+
+    
+    // Clear any interference
+    digitalWrite(19, LOW);
+    digitalWrite(20, LOW);
 }
 
-void loop() {
-  unsigned long currentMillis = millis();
+void processEncoderDelta(long delta, const String& encoderId) {
+    if (!encoderActionsLoaded) {
+        encoderActions = ConfigManager::loadActions("/config/actions.json");
+        encoderActionsLoaded = true;
+    }
+
+    auto actionIt = encoderActions.find(encoderId);
+    if (actionIt == encoderActions.end()) {
+        Serial.printf("No action found for encoder: %s\n", encoderId.c_str());
+        return;
+    }
+
+    ActionConfig encAction = actionIt->second;
+    uint8_t report[8] = {0};
+    bool wasReportSent = false;
+
+    std::vector<String> reportHex;
+    Serial.printf("Encoder delta: %ld\n", delta);
+
+    if (delta < 0 && !encAction.clockwise.empty()) {
+        Serial.println("Encoder turned CLOCKWISE");
+        reportHex = encAction.clockwise;
+    } else if (delta > 0 && !encAction.counterclockwise.empty()) {
+        Serial.println("Encoder turned COUNTERCLOCKWISE");
+        reportHex = encAction.counterclockwise;
+    } else {
+        return;  // No suitable action found
+    }
+
+    if (HIDHandler::hexReportToBinary(reportHex, report, 8) && hidHandler) {
+        wasReportSent = hidHandler->sendKeyboardReport(report);
+        Serial.printf("Report Sent: %s\n", wasReportSent ? "YES" : "NO");
+    }
+}
+
+// Define a global USB configuration status
+bool usbConfigured = false;
+
+
+void setupUSB() {
+    Serial.println("\n=== Detailed USB Initialization ===");
+    
+    // Maximum initialization attempts
+    const int MAX_INIT_ATTEMPTS = 5;
+    bool usbInitSuccess = false;
+    
+    for (int attempt = 1; attempt <= MAX_INIT_ATTEMPTS; attempt++) {
+        Serial.printf("USB Initialization Attempt %d/%d\n", attempt, MAX_INIT_ATTEMPTS);
+        
+        // Attempt to begin USB
+        bool initResult = USB.begin();
+        
+        // Debug information about USB initialization
+        Serial.printf("USB.begin() Result: %s\n", initResult ? "SUCCESS" : "FAILED");
+        
+        // Intensive USB task processing
+        Serial.println("Processing USB tasks...");
+        for (int i = 0; i < 100; i++) {
+            tud_task();
+            delayMicroseconds(100);
+        }
+        
+        // Comprehensive USB status checks
+        bool mountedStatus = tud_mounted();
+        bool hidReadyStatus = tud_hid_ready();
+        // bool cdcConnectedStatus = tud_cdc_connected();
+        
+        Serial.printf("USB Mounted: %s\n", mountedStatus ? "YES" : "NO");
+        Serial.printf("HID Ready: %s\n", hidReadyStatus ? "YES" : "NO");
+        // Serial.printf("CDC Connected: %s\n", cdcConnectedStatus ? "YES" : "NO");
+        
+        // Determine if configuration was successful
+        if (mountedStatus && hidReadyStatus) {
+            usbInitSuccess = true;
+            Serial.println("USB Configuration Successful!");
+            break;
+        }
+        
+        // Delay between attempts
+        delay(500);
+    }
+    
+    // Final check for USB configuration
+    usbConfigured = usbInitSuccess;  // Set the global flag
+    
+    if (!usbInitSuccess) {
+        Serial.println("!!!CRITICAL: USB INITIALIZATION FAILED!!!");
+        // Optional: Add a way to signal critical failure
+        // For example, you could set a global flag or trigger an error LED
+    }
+}
+
+void resetAllPins() {
+    // Save USB pins state
+    int usbPinModes[2];
+    pinMode(19, INPUT); // USB D-
+    pinMode(20, INPUT); // USB D+
+    
+    // Reset all other GPIO pins to a safe state
+    for(int i=0; i<22; i++) {
+        if(i != 19 && i != 20) { // Skip USB pins
+            pinMode(i, INPUT);
+            digitalWrite(i, LOW);
+        }
+    }
+    
+    Serial.println("All GPIO pins reset to safe INPUT state");
+}
+
+void logUSBDescriptors() {
+  // Log Device Descriptor
+  const uint8_t* devDesc = tud_descriptor_device_cb();
+  Serial.println("=== Device Descriptor ===");
+  for (size_t i = 0; i < sizeof(tusb_desc_device_t); i++) {
+    Serial.printf("%02X ", devDesc[i]);
+    if ((i + 1) % 16 == 0) Serial.println();
+  }
+  Serial.println("\n");
+
+  // Log Configuration Descriptor
+  const uint8_t* configDesc = tud_descriptor_configuration_cb(0);
+  // The total length is stored in bytes 2 and 3 of the configuration descriptor.
+  uint16_t totalLength = configDesc[2] | (configDesc[3] << 8);
+  Serial.printf("=== Configuration Descriptor (Total Length: %d) ===\n", totalLength);
+  for (uint16_t i = 0; i < totalLength; i++) {
+    Serial.printf("%02X ", configDesc[i]);
+    if ((i + 1) % 16 == 0) Serial.println();
+  }
+  Serial.println("\n");
+
+  // Log String Descriptors (using index 0 through 4 as defined)
+  Serial.println("=== String Descriptors ===");
+  // There are 5 string descriptors in your array (indexes 0 to 4)
+  for (uint8_t i = 0; i < 5; i++) {
+    uint16_t const* strDesc = tud_descriptor_string_cb(i, 0x0409);
+    if (strDesc) {
+      // The first word contains the length (in bytes) and descriptor type.
+      uint8_t len = strDesc[0] & 0xFF;
+      Serial.printf("String %d: ", i);
+      // Each character is 16-bit, so loop over (len/2 - 1) characters.
+      for (uint8_t j = 1; j < len / 2; j++) {
+        Serial.print((char)strDesc[j]);
+      }
+      Serial.println();
+    }
+  }
+}
+
+void setup() {
+  // Initialize serial communication
+  Serial.begin(115200);
+  delay(3000); // Allow time for serial monitor to connect
   
-  // Heartbeat every 10 seconds
-  static unsigned long previousMillis = 0;
-  const long heartbeatInterval = 10000;
-  if (currentMillis - previousMillis >= heartbeatInterval) {
-    Serial.println("Heartbeat..");
-    previousMillis = currentMillis;
+  // Print boot message
+  Serial.println("\n=== NXE5 Modular MacroPad Initializing ===");
+  
+  // Initialize filesystem
+  if (!SPIFFS.begin(true)) {
+    Serial.println("ERROR: SPIFFS initialization failed!");
+    while (1) {
+      // Blink LED rapidly to indicate error
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);
+      delay(100);
+    }
+  }
+  Serial.println("SPIFFS initialized successfully");
+  
+  // List files in SPIFFS (for debugging)
+  listDir(SPIFFS, "/config", 1);
+  
+  // Initialize module information
+  initializeModuleInfo();
+
+  // Initialize USB with both CDC and HID functionality
+  Serial.println("Initializing USB with CDC and HID...");
+  USB.begin();
+  
+  // Initialize USB CDC Serial for communication
+  Serial.println("Starting USB CDC Serial...");
+  USBSerial.begin();
+  
+  // Wait for USB to initialize properly
+  int usbWaitCount = 0;
+  while (!tud_mounted() && usbWaitCount < 10) {
+    Serial.println("Waiting for USB to initialize...");
+    tud_task();
+    delay(500);
+    usbWaitCount++;
   }
   
-  // Update key handler
+  // Initialize hardware components
+  initializeKeyHandler();
+  initializeHIDHandler();
+  initializeEncoderHandler();
+  initializeLED();
+  
+  // Debug actions configuration
+  debugActionsConfig();
+  
+  // Perform some diagnostics
   if (keyHandler) {
-    keyHandler->updateKeys();
     keyHandler->diagnostics();
   }
   
-// Update encoder handler and check encoder changes
-if (encoderHandler) {
-    encoderHandler->updateEncoders();
+  if (encoderHandler) {
     encoderHandler->diagnostics();
-    
-    // Example for a single encoder at index 0:
-    long delta = encoderHandler->getEncoderChange(0);
-    if (delta != 0) {
-        // Retrieve HID action for the encoder from your actions JSON (should be loaded in your configuration)
-        // For this example, we assume the encoder action is stored under "encoder-1"
-        // and that the JSON contains "clockwise" and "counterclockwise" arrays.
-        static std::map<String, ActionConfig> encoderActions = ConfigManager::loadActions("/config/actions.json");
-        if (encoderActions.find("encoder-1") != encoderActions.end()) {
-            ActionConfig encAction = encoderActions["encoder-1"];
-            uint8_t report[8] = {0};
-            bool wasReportSent = false;
-            
-            // Detailed debug information about encoder change
-            Serial.printf("Encoder delta: %ld\n", delta);
-            
-            // If turning clockwise (delta negative), use the "clockwise" HID report
-            if (delta < 0 && !encAction.clockwise.empty()) {
-                Serial.println("Encoder turned CLOCKWISE");
-                Serial.print("Clockwise HID Report: ");
-                for (const auto& hexStr : encAction.clockwise) {
-                    Serial.printf("%s ", hexStr.c_str());
-                }
-                Serial.println();
-                
-                if (HIDHandler::hexReportToBinary(encAction.clockwise, report, 8)) {
-                    Serial.print("Converted Clockwise Report: ");
-                    for (int i = 0; i < 8; i++) {
-                        Serial.printf("%02X ", report[i]);
-                    }
-                    Serial.println();
-                    
-                    if (hidHandler) {
-                        wasReportSent = hidHandler->sendKeyboardReport(report);
-                        Serial.printf("Clockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
-                    }
-                }
-            }
-            // If turning counterclockwise (delta positive), use the "counterclockwise" HID report
-            else if (delta > 0 && !encAction.counterclockwise.empty()) {
-                Serial.println("Encoder turned COUNTERCLOCKWISE");
-                Serial.print("Counterclockwise HID Report: ");
-                for (const auto& hexStr : encAction.counterclockwise) {
-                    Serial.printf("%s ", hexStr.c_str());
-                }
-                Serial.println();
-                
-                if (HIDHandler::hexReportToBinary(encAction.counterclockwise, report, 8)) {
-                    Serial.print("Converted Counterclockwise Report: ");
-                    for (int i = 0; i < 8; i++) {
-                        Serial.printf("%02X ", report[i]);
-                    }
-                    Serial.println();
-                    
-                    if (hidHandler) {
-                        wasReportSent = hidHandler->sendKeyboardReport(report);
-                        Serial.printf("Counterclockwise Report Sent: %s\n", wasReportSent ? "YES" : "NO");
-                    }
-                }
-            }
-        }
+  }
+  
+  // Set initial LED colors
+  if (strip) {
+    // Make a startup animation: all LEDs light up in sequence
+    for (int i = 0; i < numLEDs; i++) {
+      setLEDColor(i, 0, 255, 0);  // Green
+      delay(50);
     }
+    delay(500);
+    
+    // Then set them to their configured colors
+    for (int i = 0; i < numLEDs; i++) {
+      float factor = ledConfigs[i].brightness / 255.0;
+      strip->setPixelColor(i, strip->Color(
+        ledConfigs[i].r * factor,
+        ledConfigs[i].g * factor,
+        ledConfigs[i].b * factor
+      ));
+    }
+    strip->show();
+  }
+  
+  // Print initialization complete message
+  Serial.println("\n=== Initialization Complete ===");
+  Serial.println("Module ID: " + currentModule.uniqueId);
+  Serial.println("Module Type: " + String(getModuleTypeName(currentModule.type)));
+  Serial.println("Buttons: " + String(currentModule.numButtons));
+  Serial.println("LEDs: " + String(currentModule.numLEDs));
+  Serial.println("Encoders: " + String(currentModule.numRotaryEncoders));
+  
+  // Send initial message and help via USB Serial
+  USBSerial.println("\n=== NXE5 MacroPad USB CDC + HID ===");
+  USBSerial.println("Firmware version 1.0");
+  USBSerial.println("USB Composite Device Ready!");
+  USBSerial.println("Type 'help' for available commands");
+  USBSerial.print("> ");
 }
 
-  // Update HID handler
-  if (hidHandler) {
-      hidHandler->update();
-  }
-
+void loop() {
   // Process USB tasks
   tud_task();
-
-    static unsigned long lastUsbCheck = 0;
   
-  // Check USB status every 5 seconds
-  if (millis() - lastUsbCheck >= 5000) {
-      lastUsbCheck = millis();
-      
-      Serial.println("\n--- USB Status ---");
-      Serial.printf("USB Connected: %s\n", tud_mounted() ? "YES" : "NO");
-      Serial.printf("USB HID Ready: %s\n", tud_hid_ready() ? "YES" : "NO");
-      Serial.printf("USB CDC Ready: %s\n", tud_cdc_connected() ? "YES" : "NO");
-      
-      // Instead of trying to use tud_hid_n_report which is for sending reports:
-      Serial.printf("USB Interface Status: %s\n", (tud_ready()) ? "READY" : "NOT READY");
+  // Handle USB CDC Serial if available
+  if (USBSerial && USBSerial.available()) {
+    String command = USBSerial.readStringUntil('\n');
+    command.trim();
+    
+    // Process commands received via USB Serial
+    if (command.length() > 0) {
+      USBSerial.printf("> %s\n", command.c_str());
+      handleCDCCommand(command);
+    }
   }
   
-  delay(5); // Small delay to ease CPU usage
+  // Update hardware handlers
+  if (keyHandler) {
+    keyHandler->updateKeys();
+  }
+  
+  if (hidHandler) {
+    hidHandler->update();
+  }
+  
+  if (encoderHandler) {
+    // Update encoder values
+    encoderHandler->updateEncoders();
+    
+    // Process encoder movements
+    static long lastEncoderPositions[MAX_ENCODERS] = {0};
+    
+    // Check each encoder for changes
+    for (uint8_t i = 0; i < MAX_ENCODERS; i++) {
+      if (encoderHandler->getEncoderType(i) != ENCODER_TYPE_MECHANICAL &&
+          encoderHandler->getEncoderType(i) != ENCODER_TYPE_AS5600) {
+        continue;  // Skip invalid encoders
+      }
+      
+      long currentPosition = encoderHandler->getEncoderPosition(i);
+      long delta = currentPosition - lastEncoderPositions[i];
+      
+      if (delta != 0) {
+        // Generate encoder ID based on index
+        String encoderId = "encoder-" + String(i + 1);
+        
+        // Process the encoder movement
+        processEncoderDelta(delta, encoderId);
+        
+        // Report to USB CDC if connected
+        if (tud_cdc_connected()) {
+          USBSerial.printf("Encoder %d moved: %ld\n", i + 1, delta);
+        }
+        
+        // Update last position
+        lastEncoderPositions[i] = currentPosition;
+      }
+    }
+  }
+  
+  // Update LED animations if active
+  if (animationActive) {
+    updateAnimation();
+  }
+  
+  // Perform periodic diagnostics
+  static unsigned long lastDiagnosticTime = 0;
+  const unsigned long diagnosticInterval = 30000;  // 30 seconds
+  
+  if (millis() - lastDiagnosticTime >= diagnosticInterval) {
+    lastDiagnosticTime = millis();
+    
+    Serial.println("\n=== Periodic System Diagnostics ===");
+    
+    // USB status
+    Serial.print("USB Status: ");
+    Serial.println(tud_mounted() ? "Connected" : "Disconnected");
+    
+    // Output to USB Serial as well
+    if (tud_cdc_connected()) {
+      USBSerial.println("\n=== Periodic System Diagnostics ===");
+      USBSerial.printf("USB Status: %s\n", tud_mounted() ? "Connected" : "Disconnected");
+      USBSerial.printf("Free Memory: %d bytes\n", ESP.getFreeHeap());
+      USBSerial.printf("Uptime: %lu seconds\n", millis() / 1000);
+    }
+    
+    // Key handler status
+    if (keyHandler) {
+      keyHandler->diagnostics();
+    }
+    
+    // Encoder handler status
+    if (encoderHandler) {
+      encoderHandler->diagnostics();
+    }
+    
+    Serial.println("=== Diagnostics Complete ===\n");
+  }
+  
+  // Small delay to prevent CPU overload
+  delay(1);
 }

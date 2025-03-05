@@ -79,13 +79,11 @@ HIDHandler::~HIDHandler() {
 
 bool HIDHandler::begin() {
     Serial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
-    
-    // Wait for USB to be ready with a timeout
     unsigned long startTime = millis();
     while (!tud_mounted() && (millis() - startTime < 5000)) {
+        tud_task();  // Process USB events
         delay(10);
     }
-    
     if (tud_mounted()) {
         Serial.println("USB device mounted successfully");
         return true;
@@ -116,6 +114,7 @@ bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     }
 }
 
+
 bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_CONSUMER_REPORT_SIZE) {
         Serial.println("Invalid consumer report");
@@ -123,10 +122,10 @@ bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
     }
     memcpy(consumerState.report, report, HID_CONSUMER_REPORT_SIZE);
     if (tud_hid_ready()) {
-        uint8_t reportWithId[HID_CONSUMER_REPORT_SIZE + 1];
-        reportWithId[0] = 2;  // Report ID for consumer controls
-        memcpy(reportWithId + 1, report, HID_CONSUMER_REPORT_SIZE);
-        tud_hid_report(2, reportWithId, sizeof(reportWithId));
+        // For the consolidated consumer report, use instance 1 directly
+        // instead of using a report ID
+        uint16_t consumerCode = (report[0] | (report[1] << 8));
+        tud_hid_report(1, report, length);
         Serial.print("Consumer report sent: ");
         for (size_t i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
             Serial.printf("%02X ", report[i]);
@@ -138,6 +137,7 @@ bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
         return false;
     }
 }
+
 
 bool HIDHandler::sendEmptyKeyboardReport() {
     uint8_t emptyReport[HID_KEYBOARD_REPORT_SIZE] = {0};
@@ -267,16 +267,30 @@ bool HIDHandler::hexReportToBinary(const std::vector<String>& hexReport, uint8_t
     return true;
 }
 
+// Example for HID handler initialization
 void initializeHIDHandler() {
-    if (!hidHandler) {
-        hidHandler = new HIDHandler();
-        if (hidHandler->begin()) {
-            Serial.println("HID handler initialized successfully");
-        } else {
-            Serial.println("Failed to initialize HID handler");
-            delete hidHandler;
-            hidHandler = nullptr;
-        }
+    if (hidHandler != nullptr) {
+        // Clean up existing instance to avoid memory leaks
+        delete hidHandler;
+        hidHandler = nullptr;
+    }
+    
+    Serial.println("Creating new HID handler instance...");
+    hidHandler = new HIDHandler();
+    
+    if (hidHandler == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to allocate memory for HID handler!");
+        return;
+    }
+    
+    bool initSuccess = hidHandler->begin();
+    Serial.printf("HID handler initialization %s\n", 
+                 initSuccess ? "SUCCESSFUL" : "FAILED");
+                 
+    if (!initSuccess) {
+        // Try alternative initialization approach
+        Serial.println("Attempting alternative HID initialization...");
+        // Add any alternative approach here
     }
 }
 

@@ -5,6 +5,8 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 
+extern USBCDC USBSerial;
+
 // LED strip will be initialized dynamically based on config
 Adafruit_NeoPixel* strip = nullptr;
 
@@ -25,7 +27,7 @@ void initializeLED() {
     // Try to load LED configuration
     String ledJson = readJsonFile("/config/LEDs.json");
     if (ledJson.isEmpty()) {
-        Serial.println("LED config not found, using defaults");
+        USBSerial.println("LED config not found, using defaults");
         
         // Use defaults from header
         numLEDs = DEFAULT_NUM_LEDS;
@@ -36,8 +38,8 @@ void initializeLED() {
         DeserializationError error = deserializeJson(doc, ledJson);
         
         if (error) {
-            Serial.print("Error parsing LED config: ");
-            Serial.println(error.c_str());
+            USBSerial.print("Error parsing LED config: ");
+            USBSerial.println(error.c_str());
             
             // Use defaults
             numLEDs = DEFAULT_NUM_LEDS;
@@ -47,7 +49,7 @@ void initializeLED() {
             numLEDs = doc["leds"]["config"].size();
             uint8_t ledPin = doc["leds"]["pin"] | DEFAULT_LED_PIN; // Use default if not specified
             
-            Serial.printf("Initializing %d LEDs on pin %d\n", numLEDs, ledPin);
+            USBSerial.printf("Initializing %d LEDs on pin %d\n", numLEDs, ledPin);
             strip = new Adafruit_NeoPixel(numLEDs, ledPin, NEO_GRB + NEO_KHZ800);
             
             // Get global brightness
@@ -117,7 +119,7 @@ void initializeLED() {
         strip->show();
     }
     
-    Serial.println("LED Handler initialized");
+    USBSerial.println("LED Handler initialized");
 }
 
 void setLEDColor(uint8_t index, uint8_t r, uint8_t g, uint8_t b) {
@@ -439,8 +441,8 @@ bool updateLEDConfigFromJson(const String& json) {
     DeserializationError error = deserializeJson(doc, json);
     
     if (error) {
-        Serial.print("Error parsing LED config JSON: ");
-        Serial.println(error.c_str());
+        USBSerial.print("Error parsing LED config JSON: ");
+        USBSerial.println(error.c_str());
         return false;
     }
     
@@ -508,7 +510,7 @@ bool saveLEDConfig() {
     // Open the file for writing
     File file = SPIFFS.open("/config/LEDs.json", "w");
     if (!file) {
-        Serial.println("Failed to open LED config file for writing");
+        USBSerial.println("Failed to open LED config file for writing");
         return false;
     }
     
@@ -518,14 +520,14 @@ bool saveLEDConfig() {
     
     // Check if the write was successful
     if (bytesWritten == config.length()) {
-        Serial.println("LED configuration saved successfully");
+        USBSerial.println("LED configuration saved successfully");
         
         // After saving LED config, trigger a config file merge to update the combined config
         mergeConfigFiles();
         
         return true;
     } else {
-        Serial.println("Failed to save LED configuration");
+        USBSerial.println("Failed to save LED configuration");
         return false;
     }
 }
@@ -533,13 +535,13 @@ bool saveLEDConfig() {
 // Helper function to read a file as string (similar to the one in ModuleSetup.cpp)
 String readJsonFile(const char* filePath) {
     if (!SPIFFS.exists(filePath)) {
-        Serial.printf("File not found: %s\n", filePath);
+        USBSerial.printf("File not found: %s\n", filePath);
         return "";
     }
     
     File file = SPIFFS.open(filePath, "r");
     if (!file) {
-        Serial.printf("Failed to open file: %s\n", filePath);
+        USBSerial.printf("Failed to open file: %s\n", filePath);
         return "";
     }
     

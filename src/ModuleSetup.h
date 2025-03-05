@@ -28,9 +28,9 @@ struct ModuleCapabilities {
     bool hasDisplay;
     uint8_t numButtons;
     uint8_t numLEDs;
-    uint8_t numRotaryEncoders;  // Standard rotary encoders
-    uint8_t numSliders;         // Linear potentiometers
-    uint8_t numAS5600Encoders;  // AS5600 12-bit magnetic encoders
+    uint8_t numRotaryEncoders; // Standard rotary encoders
+    uint8_t numSliders; // Linear potentiometers
+    uint8_t numAS5600Encoders; // AS5600 12-bit magnetic encoders
     String moduleVersion;
     String uniqueId;
     String customName;
@@ -49,6 +49,9 @@ struct ModuleInfo {
     uint8_t numSliders;
     uint8_t numAS5600Encoders;
 };
+
+// Add this external declaration
+extern ModuleCapabilities currentModule;
 
 void initializeModuleInfo();
 ModuleCapabilities getModuleCapabilities();
