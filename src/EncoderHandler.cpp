@@ -1,5 +1,7 @@
 #include "EncoderHandler.h"
 
+extern USBCDC USBSerial;
+
 // Global encoder handler instance
 EncoderHandler* encoderHandler = nullptr;
 
@@ -11,7 +13,7 @@ EncoderHandler::EncoderHandler(uint8_t numEncoders)
 {
     // Validate input parameters
     if (numEncoders > MAX_ENCODERS) {
-        Serial.println("Invalid encoder initialization parameters");
+        USBSerial.println("Invalid encoder initialization parameters");
         return;
     }
 
@@ -23,14 +25,14 @@ EncoderHandler::EncoderHandler(uint8_t numEncoders)
         mechanicalEncoders = new Encoder*[numEncoders]();
         as5600Encoders = new AS5600[numEncoders]();
 
-        Serial.printf("Encoder Handler initialized with %d encoders\n", numEncoders);
+        USBSerial.printf("Encoder Handler initialized with %d encoders\n", numEncoders);
     }
     catch (const std::exception& e) {
-        Serial.printf("Exception in encoder constructor: %s\n", e.what());
+        USBSerial.printf("Exception in encoder constructor: %s\n", e.what());
         cleanup();
     }
     catch (...) {
-        Serial.println("Unknown exception in encoder constructor");
+        USBSerial.println("Unknown exception in encoder constructor");
         cleanup();
     }
 }
@@ -118,7 +120,7 @@ void EncoderHandler::handleAS5600Encoder(uint8_t encoderIndex) {
     
     // Check if sensor is responding
     if (!as5600Encoders[encoderIndex].isConnected()) {
-        Serial.printf("Warning: AS5600 encoder %d not connected\n", encoderIndex);
+        USBSerial.printf("Warning: AS5600 encoder %d not connected\n", encoderIndex);
         return;
     }
     
@@ -161,7 +163,7 @@ void EncoderHandler::handleAS5600Encoder(uint8_t encoderIndex) {
 
 void EncoderHandler::begin() {
     if (!encoderConfigs) {
-        Serial.println("Error: Encoders not initialized in begin()");
+        USBSerial.println("Error: Encoders not initialized in begin()");
         return;
     }
 
@@ -185,7 +187,7 @@ void EncoderHandler::begin() {
                 
                 // Optional: Check magnet detection
                 if (!as5600Encoders[i].detectMagnet()) {
-                    Serial.printf("No magnet detected for encoder %d\n", i);
+                    USBSerial.printf("No magnet detected for encoder %d\n", i);
                 }
                 
                 // Configure initial state
@@ -193,12 +195,12 @@ void EncoderHandler::begin() {
                 break;
 
             default:
-                Serial.printf("Unsupported encoder type for encoder %d\n", i);
+                USBSerial.printf("Unsupported encoder type for encoder %d\n", i);
                 break;
         }
     }
 
-    Serial.println("Encoder Handler initialization complete");
+    USBSerial.println("Encoder Handler initialization complete");
 }
 
 long EncoderHandler::getEncoderPosition(uint8_t encoderIndex) const {
@@ -219,20 +221,20 @@ EncoderType EncoderHandler::getEncoderType(uint8_t encoderIndex) const {
 }
 
 void EncoderHandler::printEncoderStates() {
-    Serial.println("\n--- Encoder States ---");
+    USBSerial.println("\n--- Encoder States ---");
     for (uint8_t i = 0; i < numEncoders; i++) {
         const EncoderConfig& config = encoderConfigs[i];
-        Serial.printf("Encoder %d: ", i + 1);
+        USBSerial.printf("Encoder %d: ", i + 1);
         
         if (config.type == ENCODER_TYPE_MECHANICAL) {
-            Serial.print("Mechanical, ");
+            USBSerial.print("Mechanical, ");
         } else if (config.type == ENCODER_TYPE_AS5600) {
-            Serial.print("AS5600, ");
+            USBSerial.print("AS5600, ");
         }
         
-        Serial.printf("Position: %ld\n", config.absolutePosition);
+        USBSerial.printf("Position: %ld\n", config.absolutePosition);
     }
-    Serial.println("----------------------------\n");
+    USBSerial.println("----------------------------\n");
 }
 
 void EncoderHandler::diagnostics() {

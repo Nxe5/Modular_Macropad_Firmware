@@ -4,6 +4,8 @@
 #include "HIDHandler.h"
 #include <tusb.h>  // Include the TinyUSB header
 
+extern USBCDC USBSerial;
+
 #ifndef TUD_HID_REPORT_DESC_KEYBOARD
 #define TUD_HID_REPORT_DESC_KEYBOARD() { \
   0x05, 0x01,       /* Usage Page (Generic Desktop) */ \
@@ -78,38 +80,38 @@ HIDHandler::~HIDHandler() {
 }
 
 bool HIDHandler::begin() {
-    Serial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
+    USBSerial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
     unsigned long startTime = millis();
     while (!tud_mounted() && (millis() - startTime < 5000)) {
         tud_task();  // Process USB events
         delay(10);
     }
     if (tud_mounted()) {
-        Serial.println("USB device mounted successfully");
+        USBSerial.println("USB device mounted successfully");
         return true;
     } else {
-        Serial.println("USB device not mounted after timeout");
+        USBSerial.println("USB device not mounted after timeout");
         return false;
     }
 }
 
 bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_KEYBOARD_REPORT_SIZE) {
-        Serial.println("Invalid keyboard report");
+        USBSerial.println("Invalid keyboard report");
         return false;
     }
     memcpy(keyboardState.report, report, HID_KEYBOARD_REPORT_SIZE);
     if (tud_hid_ready()) {
         // Cast away const since tud_hid_keyboard_report expects a non-const pointer.
         tud_hid_keyboard_report(0, report[0], const_cast<uint8_t*>(report + 2));
-        Serial.print("Keyboard report sent: ");
+        USBSerial.print("Keyboard report sent: ");
         for (size_t i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
-            Serial.printf("%02X ", report[i]);
+            USBSerial.printf("%02X ", report[i]);
         }
-        Serial.println();
+        USBSerial.println();
         return true;
     } else {
-        Serial.println("HID not ready to send keyboard report");
+        USBSerial.println("HID not ready to send keyboard report");
         return false;
     }
 }
@@ -117,7 +119,7 @@ bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
 
 bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_CONSUMER_REPORT_SIZE) {
-        Serial.println("Invalid consumer report");
+        USBSerial.println("Invalid consumer report");
         return false;
     }
     memcpy(consumerState.report, report, HID_CONSUMER_REPORT_SIZE);
@@ -126,14 +128,14 @@ bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
         // instead of using a report ID
         uint16_t consumerCode = (report[0] | (report[1] << 8));
         tud_hid_report(1, report, length);
-        Serial.print("Consumer report sent: ");
+        USBSerial.print("Consumer report sent: ");
         for (size_t i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
-            Serial.printf("%02X ", report[i]);
+            USBSerial.printf("%02X ", report[i]);
         }
-        Serial.println();
+        USBSerial.println();
         return true;
     } else {
-        Serial.println("HID not ready to send consumer report");
+        USBSerial.println("HID not ready to send consumer report");
         return false;
     }
 }
@@ -154,18 +156,18 @@ bool HIDHandler::executeMacro(const char* macroId) {
     String macroKey = String(macroId);
     auto it = macros.find(macroKey);
     if (it == macros.end()) {
-        Serial.printf("Macro '%s' not found\n", macroId);
+        USBSerial.printf("Macro '%s' not found\n", macroId);
         return false;
     }
     if (executingMacro) {
-        Serial.println("Already executing a macro, ignoring request");
+        USBSerial.println("Already executing a macro, ignoring request");
         return false;
     }
     currentMacro = &(it->second);
     currentMacroStep = 0;
     executingMacro = true;
     nextMacroStepTime = millis();
-    Serial.printf("Starting execution of macro '%s'\n", macroId);
+    USBSerial.printf("Starting execution of macro '%s'\n", macroId);
     return true;
 }
 
@@ -190,15 +192,15 @@ void HIDHandler::update() {
                         success = sendConsumerReport(report.data, report.length);
                         break;
                     default:
-                        Serial.println("Unknown report type in macro");
+                        USBSerial.println("Unknown report type in macro");
                         break;
                 }
                 uint16_t delayTime = (currentMacroStep < currentMacro->delays.size()) ? currentMacro->delays[currentMacroStep] : 50;
                 nextMacroStepTime = currentTime + delayTime;
                 currentMacroStep++;
-                Serial.printf("Executed macro step %d/%d\n", currentMacroStep, currentMacro->reports.size());
+                USBSerial.printf("Executed macro step %d/%d\n", currentMacroStep, currentMacro->reports.size());
             } else {
-                Serial.println("Macro execution complete");
+                USBSerial.println("Macro execution complete");
                 executingMacro = false;
                 currentMacro = nullptr;
                 currentMacroStep = 0;
@@ -222,7 +224,7 @@ bool HIDHandler::processNextReport() {
             success = sendConsumerReport(report.data, report.length);
             break;
         default:
-            Serial.println("Unknown report type");
+            USBSerial.println("Unknown report type");
             break;
     }
     return success;
@@ -240,7 +242,7 @@ bool HIDHandler::hexReportToBinary(const char* hexReport[], size_t count, uint8_
         char* endPtr;
         binaryReport[i] = (uint8_t)strtol(hexStr, &endPtr, 16);
         if (*endPtr != '\0') {
-            Serial.printf("Invalid hex value: %s\n", hexReport[i]);
+            USBSerial.printf("Invalid hex value: %s\n", hexReport[i]);
             return false;
         }
     }
@@ -259,7 +261,7 @@ bool HIDHandler::hexReportToBinary(const std::vector<String>& hexReport, uint8_t
         char* endPtr;
         long value = strtol(hexStr, &endPtr, 16);
         if (*endPtr != '\0') {
-            Serial.printf("Invalid hex value: %s\n", hexReport[i].c_str());
+            USBSerial.printf("Invalid hex value: %s\n", hexReport[i].c_str());
             return false;
         }
         binaryReport[i] = (uint8_t)value;
@@ -275,21 +277,21 @@ void initializeHIDHandler() {
         hidHandler = nullptr;
     }
     
-    Serial.println("Creating new HID handler instance...");
+    USBSerial.println("Creating new HID handler instance...");
     hidHandler = new HIDHandler();
     
     if (hidHandler == nullptr) {
-        Serial.println("CRITICAL ERROR: Failed to allocate memory for HID handler!");
+        USBSerial.println("CRITICAL ERROR: Failed to allocate memory for HID handler!");
         return;
     }
     
     bool initSuccess = hidHandler->begin();
-    Serial.printf("HID handler initialization %s\n", 
+    USBSerial.printf("HID handler initialization %s\n", 
                  initSuccess ? "SUCCESSFUL" : "FAILED");
                  
     if (!initSuccess) {
         // Try alternative initialization approach
-        Serial.println("Attempting alternative HID initialization...");
+        USBSerial.println("Attempting alternative HID initialization...");
         // Add any alternative approach here
     }
 }

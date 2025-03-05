@@ -639,6 +639,7 @@ void safeButtonTest() {
 }
 
 // Modified initializeEncoderHandler remains as before
+
 void initializeEncoderHandler() {
     // Read components JSON from the file
     String componentsJson = ConfigManager::readFile("/config/components.json");

@@ -12,6 +12,8 @@
 #include "ConfigManager.h"
 #include "KeyHandler.h"  
 #include "LEDHandler.h"
+#include "EncoderHandler.h"
+#include "HIDHandler.h"
 
 
 USBHIDMouse Mouse;
@@ -247,6 +249,99 @@ void initializeKeyHandler() {
   USBSerial.println("=== Keyboard Matrix Initialization Complete ===\n");
 }
 
+
+void initializeEncoderHandler() {
+    // Read components JSON from the file
+    String componentsJson = ConfigManager::readFile("/config/components.json");
+    USBSerial.println("Loading components from JSON for encoders...");
+    
+    // Parse the components to get encoder configurations
+    std::vector<Component> components = ConfigManager::loadComponents("/config/components.json");
+    
+    // Count encoders
+    uint8_t encoderCount = 0;
+    for (const Component& comp : components) {
+        if (comp.type == "encoder") {
+            encoderCount++;
+        }
+    }
+    
+    USBSerial.printf("Found %d encoders in configuration\n", encoderCount);
+    
+    // Create handler if we have encoders
+    if (encoderCount > 0) {
+        encoderHandler = new EncoderHandler(encoderCount);
+        
+        // Configure each encoder
+        uint8_t encoderIndex = 0;
+        for (const Component& comp : components) {
+            if (comp.type == "encoder") {
+                // Use a larger capacity for JSON parsing here
+                DynamicJsonDocument doc(8192);
+                DeserializationError error = deserializeJson(doc, componentsJson);
+                if (error) {
+                    USBSerial.printf("Error parsing components JSON: %s\n", error.c_str());
+                    continue;
+                }
+                
+                // Find this encoder in the parsed JSON
+                JsonArray jsonComponents = doc["components"].as<JsonArray>();
+                JsonObject encoderConfig;
+                for (JsonObject component : jsonComponents) {
+                    if (component["id"].as<String>() == comp.id) {
+                        encoderConfig = component;
+                        break;
+                    }
+                }
+                
+                if (!encoderConfig.isNull()) {
+                    // Determine encoder type (default mechanical unless configured as as5600)
+                    EncoderType type = ENCODER_TYPE_MECHANICAL;
+                    if (encoderConfig.containsKey("configuration") && 
+                        encoderConfig["configuration"].containsKey("type") &&
+                        encoderConfig["configuration"]["type"].as<String>() == "as5600") {
+                        type = ENCODER_TYPE_AS5600;
+                    }
+                    
+                    // Get pins and configuration
+                    uint8_t pinA = 0, pinB = 0;
+                    int8_t direction = 1;
+                    
+                    if (encoderConfig.containsKey("mechanical")) {
+                        pinA = encoderConfig["mechanical"]["pin_a"] | 0;
+                        pinB = encoderConfig["mechanical"]["pin_b"] | 0;
+                    }
+                    
+                    if (encoderConfig.containsKey("configuration") && 
+                        encoderConfig["configuration"].containsKey("direction")) {
+                        direction = encoderConfig["configuration"]["direction"] | 1;
+                    }
+                    
+                    // Configure this encoder
+                    USBSerial.printf("Configuring %s: type=%d, pinA=%d, pinB=%d, direction=%d\n", 
+                                  comp.id.c_str(), type, pinA, pinB, direction);
+                    
+                    encoderHandler->configureEncoder(
+                        encoderIndex++,
+                        type,
+                        pinA,
+                        pinB,
+                        direction,
+                        0 // zeroPosition
+                    );
+                }
+            }
+        }
+        
+        // Initialize the configured encoders
+        encoderHandler->begin();
+        USBSerial.println("Encoder handler initialized successfully");
+    } else {
+        USBSerial.println("No encoders found in configuration");
+    }
+}
+
+
 // Function to debug actions configuration
 void debugActionsConfig() {
     auto actions = ConfigManager::loadActions("/config/actions.json");
@@ -267,6 +362,28 @@ void debugActionsConfig() {
     }
     USBSerial.println("==================================\n");
 }
+
+void keyboardTask(void *pvParameters) {
+    while (true) {
+        if (keyHandler) {
+            keyHandler->updateKeys();
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // Scan every 10ms (adjust as needed)
+    }
+}
+
+void encoderTask(void *pvParameters) {
+    while (true) {
+        if (encoderHandler) {
+            encoderHandler->updateEncoders();
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // Adjust the delay as needed (here 10ms)
+    }
+}
+
+
+
+
 
 void setup() {
     // Initialize USB with both HID and CDC
@@ -291,14 +408,18 @@ void setup() {
     USBSerial.println("Module Info:");
     USBSerial.println(moduleInfo);
     
-    USBSerial.println("USB HID Mouse and CDC initialized");
-    USBSerial.println("USB CDC Serial initialized");
+    // Initialize HID handler before other components
+    USBSerial.println("Initializing HID Handler...");
+    initializeHIDHandler();
 
     USBSerial.println("Initializing KeyHandler...");
     initializeKeyHandler();  // Make sure this function is defined and linked
 
     USBSerial.println("Initialize LEDs");
     initializeLED();
+
+    USBSerial.println("Initialize Encoders");
+    initializeEncoderHandler();
 
     // Debug actions configuration
     debugActionsConfig();
@@ -335,9 +456,19 @@ void loop() {
     }
 
     // Update hardware handlers
-    if (keyHandler) {
-        keyHandler->updateKeys();
-    }
+    xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
+    xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
+
+
+    // // Key handler status
+    // if (keyHandler) {
+    //   keyHandler->diagnostics();
+    // }
+    
+    // // Encoder handler status
+    // if (encoderHandler) {
+    //   encoderHandler->diagnostics();
+    // }
     
     delay(1);
 }
