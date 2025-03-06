@@ -288,7 +288,11 @@ void setup() {
     // Initialize USB with both HID and CDC
     USB.begin();
     USBSerial.begin();
+
     delay(10000);
+
+    ConsumerControl.begin();
+
     USBSerial.println(TAG);
     
     // Mount SPIFFS for configuration files

@@ -79,22 +79,6 @@ HIDHandler::~HIDHandler() {
     // Nothing to free
 }
 
-bool HIDHandler::begin() {
-    USBSerial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
-    unsigned long startTime = millis();
-    while (!tud_mounted() && (millis() - startTime < 5000)) {
-        tud_task();  // Process USB events
-        delay(10);
-    }
-    if (tud_mounted()) {
-        USBSerial.println("USB device mounted successfully");
-        return true;
-    } else {
-        USBSerial.println("USB device not mounted after timeout");
-        return false;
-    }
-}
-
 // Fixed sendKeyboardReport with proper const casting
 bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_KEYBOARD_REPORT_SIZE) {
@@ -138,53 +122,9 @@ bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     }
 }
 
-// Fixed sendConsumerReport with proper type handling
-bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
-    if (!report || length != HID_CONSUMER_REPORT_SIZE) {
-        USBSerial.println("Invalid consumer report");
-        return false;
-    }
-    
-    // Copy report to our state
-    memcpy(consumerState.report, report, HID_CONSUMER_REPORT_SIZE);
-    
-    if (!tud_mounted()) {
-        USBSerial.println("USB device not mounted");
-        return false;
-    }
-    
-    if (tud_hid_ready()) {
-        // For consumer control, combine the first two bytes to create a 16-bit code
-        uint16_t consumerCode = (report[0] | (report[1] << 8));
-        
-        // Send the consumer code (this function expects a non-const pointer)
-        bool success = tud_hid_report(0, &consumerCode, sizeof(consumerCode));
-        
-        if (success) {
-            USBSerial.print("Consumer report sent: ");
-            for (size_t i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
-                USBSerial.printf("%02X ", report[i]);
-            }
-            USBSerial.println();
-            return true;
-        } else {
-            USBSerial.println("Failed to send consumer report");
-            return false;
-        }
-    } else {
-        USBSerial.println("HID not ready to send consumer report");
-        return false;
-    }
-}
-
 bool HIDHandler::sendEmptyKeyboardReport() {
     uint8_t emptyReport[HID_KEYBOARD_REPORT_SIZE] = {0};
     return sendKeyboardReport(emptyReport, HID_KEYBOARD_REPORT_SIZE);
-}
-
-bool HIDHandler::sendEmptyConsumerReport() {
-    uint8_t emptyReport[HID_CONSUMER_REPORT_SIZE] = {0};
-    return sendConsumerReport(emptyReport, HID_CONSUMER_REPORT_SIZE);
 }
 
 bool HIDHandler::executeMacro(const char* macroId) {
@@ -332,15 +272,127 @@ void initializeHIDHandler() {
     }
 }
 
-void updateHIDHandler() {
-    if (hidHandler) {
-        hidHandler->update();
-    }
-}
-
 void cleanupHIDHandler() {
     if (hidHandler) {
         delete hidHandler;
         hidHandler = nullptr;
+    }
+}
+
+
+
+bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
+    // Validate input
+    if (!report || length != 4) {
+        USBSerial.println("ERROR: Invalid consumer report");
+        return false;
+    }
+    
+    // Check USB mounted status with more aggressive timeout
+    unsigned long startTime = millis();
+    while (!tud_mounted() && (millis() - startTime < 2000)) {
+        tud_task();
+        delay(10);
+    }
+    
+    if (!tud_mounted()) {
+        USBSerial.println("ERROR: USB not mounted");
+        return false;
+    }
+    
+    // Check HID ready status
+    if (!tud_hid_ready()) {
+        USBSerial.println("ERROR: HID not ready");
+        return false;
+    }
+    
+    // Construct 16-bit consumer code 
+    // Prioritize the volume control codes
+    uint16_t consumerCode = 0x0000;
+    
+    // Explicit handling of volume codes
+    if (report[2] == 0xE9) {
+        consumerCode = 0xE9;  // Volume Up
+        USBSerial.println("Preparing Volume Up Command");
+    } 
+    else if (report[2] == 0xEA) {
+        consumerCode = 0xEA;  // Volume Down
+        USBSerial.println("Preparing Volume Down Command");
+    }
+    
+    // Detailed logging
+    USBSerial.printf("Raw Consumer Report: %02X %02X %02X %02X\n", 
+                     report[0], report[1], report[2], report[3]);
+    USBSerial.printf("Consumer Code: 0x%04X\n", consumerCode);
+    
+    // Attempt to send report
+    bool success = false;
+    
+    // Try multiple times with small delays
+    for (int attempts = 0; attempts < 3; attempts++) {
+        success = tud_hid_report(0, &consumerCode, sizeof(consumerCode));
+        
+        if (success) {
+            USBSerial.printf("Consumer Report Sent Successfully (Attempt %d)\n", attempts + 1);
+            break;
+        } else {
+            USBSerial.printf("Consumer Report Send Failed (Attempt %d)\n", attempts + 1);
+            delay(10);  // Small delay between attempts
+        }
+    }
+    
+    return success;
+}
+
+bool HIDHandler::sendEmptyConsumerReport() {
+    uint16_t emptyCode = 0x0000;
+    
+    // Check USB mounted status
+    if (!tud_mounted()) {
+        USBSerial.println("ERROR: Cannot send empty report - USB not mounted");
+        return false;
+    }
+    
+    // Check HID ready status
+    if (!tud_hid_ready()) {
+        USBSerial.println("ERROR: Cannot send empty report - HID not ready");
+        return false;
+    }
+    
+    // Attempt to send empty report
+    bool success = tud_hid_report(0, &emptyCode, sizeof(emptyCode));
+    
+    USBSerial.printf("Empty Consumer Report %s\n", 
+                     success ? "SENT SUCCESSFULLY" : "FAILED");
+    
+    return success;
+}
+
+bool HIDHandler::begin() {
+    USBSerial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
+    
+    // More aggressive USB initialization
+    unsigned long startTime = millis();
+    while (!tud_mounted() && (millis() - startTime < 5000)) {
+        tud_task();  // Process USB events
+        delay(50);  // Longer delay between attempts
+        
+        // Print status periodically
+        if (millis() % 1000 == 0) {
+            USBSerial.println("Waiting for USB to mount...");
+        }
+    }
+    
+    if (tud_mounted()) {
+        USBSerial.println("USB device mounted successfully");
+        
+        // Additional checks
+        USBSerial.printf("HID Ready: %s\n", tud_hid_ready() ? "YES" : "NO");
+        USBSerial.printf("CDC Connected: %s\n", tud_cdc_connected() ? "YES" : "NO");
+        
+        return true;
+    } else {
+        USBSerial.println("ERROR: USB device not mounted after timeout");
+        return false;
     }
 }

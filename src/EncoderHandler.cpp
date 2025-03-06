@@ -165,187 +165,58 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
     USBSerial.printf("Loaded actions for %d encoders\n", encoderActions.size());
 }
 
-void EncoderHandler::updateEncoders() {
-    if (!encoderConfigs) return;
-
-    // Update encoders
-    for (uint8_t i = 0; i < numEncoders; i++) {
-        // Store previous position to detect change
-        long prevPosition = encoderConfigs[i].absolutePosition;
-        
-        // Update encoder position based on type
-        switch (encoderConfigs[i].type) {
-            case ENCODER_TYPE_MECHANICAL:
-                handleMechanicalEncoder(i);
-                break;
-            case ENCODER_TYPE_AS5600:
-                handleAS5600Encoder(i);
-                break;
-            default:
-                break;
-        }
-        
-        // Check if encoder position changed
-        long newPosition = encoderConfigs[i].absolutePosition;
-        if (newPosition != prevPosition) {
-            // Determine direction of rotation
-            bool clockwise = (newPosition > prevPosition);
-            
-            // Log the event
-            USBSerial.printf("Encoder %d rotated %s (position: %ld)\n", 
-                           i + 1, clockwise ? "clockwise" : "counterclockwise", newPosition);
-            
-            // Send appropriate HID report based on direction
-            executeEncoderAction(i, clockwise);
-            
-            // Update last reported position
-            encoderConfigs[i].lastReportedPosition = newPosition;
-        }
-    }
-}
-
-void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) {
-    if (!hidHandler) {
-        USBSerial.println("ERROR: hidHandler is NULL in executeEncoderAction!");
-        return;
-    }
-    
-    // Form the encoder ID string
-    String encoderId = "encoder-" + String(encoderIndex + 1);
-    
-    // Look up the encoder action
-    auto it = encoderActions.find(encoderId);
-    if (it == encoderActions.end()) {
-        // Fallback to default volume control if no action is defined
-        USBSerial.printf("No action defined for %s, using default volume control\n", encoderId.c_str());
-        
-        // Default volume control
-        const uint8_t volumeUp[HID_CONSUMER_REPORT_SIZE] = {0x00, 0xEA, 0x00, 0x00};
-        const uint8_t volumeDown[HID_CONSUMER_REPORT_SIZE] = {0x00, 0xE9, 0x00, 0x00};
-        
-        if (clockwise) {
-            USBSerial.println("Sending Volume UP command (default)");
-            hidHandler->sendConsumerReport(volumeUp);
-        } else {
-            USBSerial.println("Sending Volume DOWN command (default)");
-            hidHandler->sendConsumerReport(volumeDown);
-        }
-        
-        // Release the control after a short delay
-        delay(20);
-        hidHandler->sendEmptyConsumerReport();
-        return;
-    }
-    
-    // Get the encoder action
-    const EncoderAction& action = it->second;
-    
-    if (action.type == "hid") {
-        // Check if this is actually a consumer report (volume/media controls)
-        const std::vector<uint8_t>& report = clockwise ? action.cwHidReport : action.ccwHidReport;
-        
-        // Special case for consumer control codes sent as HID reports
-        if (report.size() == 4 && (report[1] == 0xE9 || report[1] == 0xEA || report[1] == 0xE2)) {
-            USBSerial.print("Sending Consumer report (from HID type): ");
-            for (size_t i = 0; i < report.size(); i++) {
-                USBSerial.printf("%02X ", report[i]);
-            }
-            USBSerial.println();
-            
-            hidHandler->sendConsumerReport(report.data());
-            delay(20);
-            hidHandler->sendEmptyConsumerReport();
-        }
-        else if (report.size() == HID_KEYBOARD_REPORT_SIZE) {
-            USBSerial.print("Sending HID Keyboard report: ");
-            for (size_t i = 0; i < report.size(); i++) {
-                USBSerial.printf("%02X ", report[i]);
-            }
-            USBSerial.println();
-            
-            hidHandler->sendKeyboardReport(report.data());
-            delay(20);
-            hidHandler->sendEmptyKeyboardReport();
-        } else {
-            USBSerial.println("Error: Invalid HID report size");
-        }
-    }
-    else if (action.type == "multimedia") {
-        // Multimedia consumer action
-        const std::vector<uint8_t>& report = clockwise ? action.cwConsumerReport : action.ccwConsumerReport;
-        
-        if (report.size() == HID_CONSUMER_REPORT_SIZE) {
-            USBSerial.print("Sending Consumer report: ");
-            for (size_t i = 0; i < report.size(); i++) {
-                USBSerial.printf("%02X ", report[i]);
-            }
-            USBSerial.println();
-            
-            hidHandler->sendConsumerReport(report.data());
-            delay(20);
-            hidHandler->sendEmptyConsumerReport();
-        } else {
-            USBSerial.println("Error: Invalid Consumer report size");
-        }
-    }
-}
-void EncoderHandler::handleMechanicalEncoder(uint8_t encoderIndex) {
-    if (!mechanicalEncoders[encoderIndex]) return;
-
-    EncoderConfig& config = encoderConfigs[encoderIndex];
-    
-    // Read current position
-    long currentPosition = mechanicalEncoders[encoderIndex]->read();
-    
-    // Update absolute position with direction
-    config.absolutePosition = currentPosition * config.direction;
-}
 
 void EncoderHandler::handleAS5600Encoder(uint8_t encoderIndex) {
     EncoderConfig& config = encoderConfigs[encoderIndex];
     
-    // Check if sensor is responding
+    // Enhanced robustness for magnetic encoder
+    static const uint16_t MAX_POSITION = 4096; // 12-bit encoder
+    static const int MAX_STEPS_PER_CYCLE = 50;  // Limit sudden movements
+    
+    // Check sensor connectivity
     if (!as5600Encoders[encoderIndex].isConnected()) {
-        USBSerial.printf("Warning: AS5600 encoder %d not connected\n", encoderIndex);
+        USBSerial.printf("Warning: AS5600 encoder %d disconnected\n", encoderIndex);
         return;
     }
     
-    // Get current raw position (0-4095)
+    // Get current raw position
     uint16_t currentRawPosition = as5600Encoders[encoderIndex].rawAngle();
     
-    // On first read, just store the position
-    if (config.lastRawPosition == 0 && config.absolutePosition == 0) {
+    // First-time initialization
+    if (config.lastRawPosition == 0) {
         config.lastRawPosition = currentRawPosition;
         return;
     }
     
-    // Calculate movement considering wrap-around
-    const uint16_t MAX_POSITION = 4096; // 12-bit encoder
+    // Calculate position difference with wrap-around handling
     int16_t rawDiff;
-    
-    // Handle wrap-around in both directions
     if (currentRawPosition >= config.lastRawPosition) {
-        // Normal case - no wrap-around
         rawDiff = currentRawPosition - config.lastRawPosition;
-        
-        // Check if this might be a wrap-around from high to low
         if (rawDiff > MAX_POSITION / 2) {
-            rawDiff = -(MAX_POSITION - rawDiff);
+            rawDiff -= MAX_POSITION;
         }
     } else {
-        // currentRawPosition < lastRawPosition
         rawDiff = -(config.lastRawPosition - currentRawPosition);
-        
-        // Check if this might be a wrap-around from low to high
         if (-rawDiff > MAX_POSITION / 2) {
-            rawDiff = MAX_POSITION + rawDiff;
+            rawDiff += MAX_POSITION;
         }
     }
     
-    // Apply direction and update position
+    // Sanity check movement
+    if (abs(rawDiff) > MAX_STEPS_PER_CYCLE) {
+        USBSerial.printf("Warning: Excessive movement on AS5600 encoder %d\n", encoderIndex);
+        return;
+    }
+    
+    // Update position with direction
     config.absolutePosition += rawDiff * config.direction;
     config.lastRawPosition = currentRawPosition;
+    
+    USBSerial.printf("AS5600 Encoder %d: Raw Diff = %d, Total Position = %ld\n", 
+                   encoderIndex, rawDiff, config.absolutePosition);
 }
+
+
 
 void EncoderHandler::begin() {
     if (!encoderConfigs) {
@@ -435,5 +306,113 @@ void EncoderHandler::diagnostics() {
     if (now - lastDiagTime >= diagInterval) {
         lastDiagTime = now;
         printEncoderStates();
+    }
+}
+
+void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) {
+    if (!hidHandler) {
+        USBSerial.println("ERROR: HID Handler not available");
+        return;
+    }
+
+    delay(500);
+    
+    // Predefined volume control reports
+    const uint8_t volumeUp[4] = {0x00, 0x00, 0xE9, 0x00};
+    const uint8_t volumeDown[4] = {0x00, 0x00, 0xEA, 0x00};
+    const uint8_t emptyReport[4] = {0x00, 0x00, 0x00, 0x00};
+    
+    // Select report based on rotation direction
+    const uint8_t* report = clockwise ? volumeUp : volumeDown;
+    const char* actionName = clockwise ? "Volume UP" : "Volume DOWN";
+    
+    USBSerial.printf("Encoder %d Action: %s\n", encoderIndex, actionName);
+    
+
+    // Send consumer report with multiple error checks
+    bool reportSent = false;
+    for (int attempts = 0; attempts < 3; attempts++) {
+        if (hidHandler->sendConsumerReport(report, 4)) {
+            reportSent = true;
+            break;
+        }
+        delay(10);  // Short delay between attempts
+    }
+    
+    if (!reportSent) {
+        USBSerial.printf("FAILED to send %s command\n", actionName);
+        return;
+    }
+    
+    // Small delay to simulate key press
+    delay(600);
+    
+    // Release key
+    for (int attempts = 0; attempts < 3; attempts++) {
+        if (hidHandler->sendConsumerReport(emptyReport, 4)) {
+            break;
+        }
+        delay(10);
+    }
+}
+
+// Add extra robustness to encoder reading
+void EncoderHandler::handleMechanicalEncoder(uint8_t encoderIndex) {
+    if (!mechanicalEncoders[encoderIndex]) return;
+
+    EncoderConfig& config = encoderConfigs[encoderIndex];
+    
+    // Read current position with basic noise filtering
+    long currentPosition = mechanicalEncoders[encoderIndex]->read();
+    
+    // Calculate absolute position with direction
+    long newAbsolutePosition = currentPosition * config.direction;
+    
+    // Only update if significant change
+    long positionChange = newAbsolutePosition - config.absolutePosition;
+    if (abs(positionChange) >= 1) {
+        config.absolutePosition = newAbsolutePosition;
+        
+        USBSerial.printf("Mechanical Encoder %d: Position Change = %ld, Total Position = %ld\n", 
+                       encoderIndex, positionChange, config.absolutePosition);
+    }
+}
+
+void EncoderHandler::updateEncoders() {
+    if (!encoderConfigs) return;
+
+    // Static variables to track previous positions
+    static long prevPositions[MAX_ENCODERS] = {0};
+
+    for (uint8_t i = 0; i < numEncoders; i++) {
+        // Update encoder position based on type
+        switch (encoderConfigs[i].type) {
+            case ENCODER_TYPE_MECHANICAL:
+                handleMechanicalEncoder(i);
+                break;
+            case ENCODER_TYPE_AS5600:
+                handleAS5600Encoder(i);
+                break;
+            default:
+                break;
+        }
+        
+        // Get current position
+        long currentPosition = encoderConfigs[i].absolutePosition;
+        
+        // Detect meaningful position change
+        if (currentPosition != prevPositions[i]) {
+            // Determine rotation direction
+            bool clockwise = (currentPosition > prevPositions[i]);
+            
+            USBSerial.printf("Encoder %d rotated %s (position: %ld)\n", 
+                           i, clockwise ? "clockwise" : "counterclockwise", currentPosition);
+            
+            // Send HID report for rotation
+            executeEncoderAction(i, clockwise);
+            
+            // Update previous position
+            prevPositions[i] = currentPosition;
+        }
     }
 }
