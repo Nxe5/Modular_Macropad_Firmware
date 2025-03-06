@@ -22,4 +22,28 @@ void updateDisplay();
 void toggleMode();
 void handleEncoder(int encoderPosition);
 
+// Encoder Types
+enum EncoderType {
+    ENCODER_TYPE_MECHANICAL,  // Standard rotary encoder
+    ENCODER_TYPE_AS5600       // Magnetic encoder
+};
+
+// Configuration for each encoder
+struct EncoderConfig {    
+    // Pins for different encoder types
+    uint8_t pinA = 0;        // Mechanical encoder or I2C SDA for AS5600
+    uint8_t pinB = 0;        // Mechanical encoder or I2C SCL for AS5600
+    
+    // AS5600 specific configuration
+    uint16_t zeroPosition = 0;  // Calibration zero point
+    uint16_t steps = 4096;      // Total steps for AS5600 (12-bit)
+    int8_t direction = 1;       // 1 or -1 to invert rotation
+    
+    // Detailed tracking
+    long absolutePosition = 0;      // Current absolute position
+    long lastReportedPosition = 0;  // Last reported position
+    uint16_t lastRawPosition = 0;   // Last raw AS5600 position
+    long lastMechanicalPosition = 0; // Last mechanical encoder position
+};
+
 #endif // DISPLAY_HANDLER_H
