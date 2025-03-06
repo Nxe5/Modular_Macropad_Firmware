@@ -280,93 +280,79 @@ void cleanupHIDHandler() {
 }
 
 
-
 bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
-    // Validate input
+    // We still expect a 4-byte array from configuration, but we only use byte 2.
     if (!report || length != 4) {
         USBSerial.println("ERROR: Invalid consumer report");
         return false;
     }
     
-    // Check USB mounted status with more aggressive timeout
+    // Wait for USB to mount
     unsigned long startTime = millis();
     while (!tud_mounted() && (millis() - startTime < 2000)) {
         tud_task();
         delay(10);
     }
-    
     if (!tud_mounted()) {
         USBSerial.println("ERROR: USB not mounted");
         return false;
     }
     
-    // Check HID ready status
     if (!tud_hid_ready()) {
         USBSerial.println("ERROR: HID not ready");
         return false;
     }
     
-    // Construct 16-bit consumer code 
-    // Prioritize the volume control codes
+    // Construct a 16-bit consumer control value.
     uint16_t consumerCode = 0x0000;
-    
-    // Explicit handling of volume codes
     if (report[2] == 0xE9) {
-        consumerCode = 0xE9;  // Volume Up
-        USBSerial.println("Preparing Volume Up Command");
-    } 
-    else if (report[2] == 0xEA) {
-        consumerCode = 0xEA;  // Volume Down
-        USBSerial.println("Preparing Volume Down Command");
+        consumerCode = 0x00E9; // Volume UP
+        USBSerial.println("Preparing Volume UP Command");
+    } else if (report[2] == 0xEA) {
+        consumerCode = 0x00EA; // Volume DOWN
+        USBSerial.println("Preparing Volume DOWN Command");
     }
     
-    // Detailed logging
-    USBSerial.printf("Raw Consumer Report: %02X %02X %02X %02X\n", 
+    USBSerial.printf("Raw Consumer Report: %02X %02X %02X %02X\n",
                      report[0], report[1], report[2], report[3]);
     USBSerial.printf("Consumer Code: 0x%04X\n", consumerCode);
     
-    // Attempt to send report
     bool success = false;
-    
-    // Try multiple times with small delays
+    // Use Report ID 0x04 as defined in your HID descriptor.
     for (int attempts = 0; attempts < 3; attempts++) {
-        success = tud_hid_report(0, &consumerCode, sizeof(consumerCode));
-        
+        success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&consumerCode), sizeof(consumerCode));
         if (success) {
             USBSerial.printf("Consumer Report Sent Successfully (Attempt %d)\n", attempts + 1);
             break;
         } else {
             USBSerial.printf("Consumer Report Send Failed (Attempt %d)\n", attempts + 1);
-            delay(10);  // Small delay between attempts
+            delay(10);
         }
     }
-    
     return success;
 }
 
 bool HIDHandler::sendEmptyConsumerReport() {
     uint16_t emptyCode = 0x0000;
     
-    // Check USB mounted status
     if (!tud_mounted()) {
         USBSerial.println("ERROR: Cannot send empty report - USB not mounted");
         return false;
     }
     
-    // Check HID ready status
     if (!tud_hid_ready()) {
         USBSerial.println("ERROR: Cannot send empty report - HID not ready");
         return false;
     }
     
-    // Attempt to send empty report
-    bool success = tud_hid_report(0, &emptyCode, sizeof(emptyCode));
-    
-    USBSerial.printf("Empty Consumer Report %s\n", 
+    // Send an empty 16-bit consumer report with Report ID 0x04.
+    bool success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&emptyCode), sizeof(emptyCode));
+    USBSerial.printf("Empty Consumer Report %s\n",
                      success ? "SENT SUCCESSFULLY" : "FAILED");
-    
     return success;
 }
+
+
 
 bool HIDHandler::begin() {
     USBSerial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
