@@ -15,8 +15,16 @@
 #include "EncoderHandler.h"
 #include "HIDHandler.h"
 
+#include <USB.h>
+#include <USBHID.h>
+#include <USBHIDKeyboard.h>
+#include <USBHIDConsumerControl.h>
+#include <USBHIDMouse.h>
+#include <USBCDC.h>
 
-USBHIDMouse Mouse;
+USBHIDKeyboard Keyboard;
+USBHIDConsumerControl ConsumerControl;
+USBHIDMouse Mouse;  // Optional if you need mouse controls
 USBCDC USBSerial;
 
 #define TAG "HID+CDC Esp32-s3 Macropad"
@@ -96,157 +104,52 @@ void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t
     Serial.println("Pin configuration complete\n");
 }
 
-// Improved key mapping creation from components.json with no character overlaps
-char** createKeyMappingFromComponents(const String& componentsJson, uint8_t rows, uint8_t cols) {
-    // Allocate the key mapping grid
-    char** keyMapping = new char*[rows];
-    for (uint8_t i = 0; i < rows; i++) {
-        keyMapping[i] = new char[cols];
-        for (uint8_t j = 0; j < cols; j++) {
-            keyMapping[i][j] = 'X';  // Initialize all positions as 'X'
-        }
-    }
-
-    // Parse the components JSON
-    DynamicJsonDocument doc(8192);
-    DeserializationError error = deserializeJson(doc, componentsJson);
-    
-    if (error) {
-        Serial.print("Error parsing components JSON: ");
-        Serial.println(error.c_str());
-        return keyMapping;
-    }
-
-    // Iterate through components
-    JsonArray components = doc["components"].as<JsonArray>();
-    
-    for (JsonObject component : components) {
-        String type = component["type"].as<String>();
-        String id = component["id"].as<String>();
-        
-        // Check if component is a button or an encoder with a button
-        if (type == "button" || 
-            (type == "encoder" && 
-             component.containsKey("with_button") && 
-             component["with_button"].as<bool>())) {
-            
-            // Get the component's location
-            uint8_t startRow = component["start_location"]["row"];
-            uint8_t startCol = component["start_location"]["column"];
-            
-            // Extract the component number and create a unique key character
-            char keyChar = 'X';
-            
-            if (type == "button") {
-                // For buttons, extract number from id (e.g., "button-1" -> '1')
-                int dashPos = id.indexOf('-');
-                if (dashPos >= 0 && dashPos < id.length() - 1) {
-                    String numStr = id.substring(dashPos + 1);
-                    int buttonNum = numStr.toInt();
-                    
-                    if (buttonNum > 0 && buttonNum <= 9) {
-                        // Buttons 1-9 -> '1'-'9'
-                        keyChar = '0' + buttonNum;
-                    } else if (buttonNum >= 10 && buttonNum <= 35) {
-                        // Buttons 10-35 -> 'A'-'Z'
-                        keyChar = 'A' + (buttonNum - 10);
-                    }
-                }
-            } else if (type == "encoder" && component["with_button"].as<bool>()) {
-                // For encoder buttons, use special characters that won't overlap with buttons
-                // Use characters outside the normal ASCII range for better separation
-                int dashPos = id.indexOf('-');
-                if (dashPos >= 0 && dashPos < id.length() - 1) {
-                    String numStr = id.substring(dashPos + 1);
-                    int encoderNum = numStr.toInt();
-                    // Use 'a'-'z' range for encoders to differentiate from buttons
-                    keyChar = 'a' + (encoderNum - 1);  // encoder-1 -> 'a', encoder-2 -> 'b', etc.
-                }
-            }
-            
-            // Validate the location is within grid bounds
-            if (startRow < rows && startCol < cols && keyChar != 'X') {
-                // Assign the key marker based on component ID
-                keyMapping[startRow][startCol] = keyChar;
-                
-                Serial.printf("Mapped %s at [%d,%d] with key %c\n", 
-                              id.c_str(), startRow, startCol, keyChar);
-            }
-        }
-    }
-
-    // Debug print the entire key mapping
-    Serial.println("Key mapping matrix:");
-    for (uint8_t i = 0; i < rows; i++) {
-        Serial.print("Row ");
-        Serial.print(i);
-        Serial.print(": ");
-        for (uint8_t j = 0; j < cols; j++) {
-            Serial.print(keyMapping[i][j]);
-            Serial.print(" ");
-        }
-        Serial.println();
-    }
-
-    return keyMapping;
-}
-
 // initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
 void initializeKeyHandler() {
-  const uint8_t rows = 5;
-  const uint8_t cols = 5;
-  uint8_t rowPins[rows] = {ROW0, ROW1, ROW2, ROW3, ROW4};
-  uint8_t colPins[cols] = {COL0, COL1, COL2, COL3, COL4};
-  
-  USBSerial.println("\n=== Initializing Keyboard Matrix ===");
-  USBSerial.println("Matrix dimensions: 5x5");
-  
-  // Log pin assignments for clarity  
-  USBSerial.println("Row pins:");
-  for (int i = 0; i < rows; i++) {
-    USBSerial.printf("  Row %d: GPIO %d\n", i, rowPins[i]);
-  }
-  
-  USBSerial.println("Column pins:");
-  for (int i = 0; i < cols; i++) {
-    USBSerial.printf("  Column %d: GPIO %d\n", i, colPins[i]);
-  }
-  
-  // Configure pin modes
-  configurePinModes(rowPins, colPins, rows, cols);
-  
-  // Read components JSON from the file
-  String componentsJson = ConfigManager::readFile("/config/components.json");
-  USBSerial.println("Loading components from JSON...");
-  
-  // Create key mapping dynamically from components
-  USBSerial.println("Creating key mapping from components...");
-  char** keyMapping = createKeyMappingFromComponents(componentsJson, rows, cols);
-  
-  // Create and initialize the key handler instance
-  USBSerial.println("Initializing key handler instance...");
-  keyHandler = new KeyHandler(rows, cols, keyMapping, rowPins, colPins);
-  
-  if (keyHandler) {
-    keyHandler->begin();
+    const uint8_t rows = 5;
+    const uint8_t cols = 5;
+    uint8_t rowPins[rows] = {ROW0, ROW1, ROW2, ROW3, ROW4};
+    uint8_t colPins[cols] = {COL0, COL1, COL2, COL3, COL4};
     
-    // Load the actions configuration from SPIFFS
-    USBSerial.println("Loading key action configuration...");
-    auto actions = ConfigManager::loadActions("/config/actions.json");
-    keyHandler->loadKeyConfiguration(actions);
+    USBSerial.println("\n=== Initializing Keyboard Matrix ===");
+    USBSerial.println("Matrix dimensions: 5x5");
     
-    USBSerial.println("Key handler initialization complete");
-  } else {
-    USBSerial.println("ERROR: Failed to create key handler instance!");
-  }
-  
-  // Clean up temporary keyMapping allocation
-  for (uint8_t i = 0; i < rows; i++) {
-    delete[] keyMapping[i];
-  }
-  delete[] keyMapping;
-  
-  USBSerial.println("=== Keyboard Matrix Initialization Complete ===\n");
+    // Log pin assignments for clarity  
+    USBSerial.println("Row pins:");
+    for (int i = 0; i < rows; i++) {
+        USBSerial.printf("  Row %d: GPIO %d\n", i, rowPins[i]);
+    }
+    
+    USBSerial.println("Column pins:");
+    for (int i = 0; i < cols; i++) {
+        USBSerial.printf("  Column %d: GPIO %d\n", i, colPins[i]);
+    }
+    
+    // Configure pin modes
+    configurePinModes(rowPins, colPins, rows, cols);
+    
+    // Load components from JSON
+    USBSerial.println("Loading components from JSON...");
+    std::vector<Component> components = ConfigManager::loadComponents("/config/components.json");
+    
+    // Create and initialize key handler with components
+    USBSerial.println("Initializing key handler instance...");
+    keyHandler = new KeyHandler(rows, cols, components, rowPins, colPins);
+    
+    if (keyHandler) {
+        keyHandler->begin();
+        
+        // Load actions configuration
+        USBSerial.println("Loading key action configuration...");
+        auto actions = ConfigManager::loadActions("/config/actions.json");
+        keyHandler->loadKeyConfiguration(actions);
+        
+        USBSerial.println("Key handler initialization complete");
+    } else {
+        USBSerial.println("ERROR: Failed to create key handler instance!");
+    }
+    
+    USBSerial.println("=== Keyboard Matrix Initialization Complete ===\n");
 }
 
 
@@ -381,18 +284,13 @@ void encoderTask(void *pvParameters) {
     }
 }
 
-
-
-
-
 void setup() {
     // Initialize USB with both HID and CDC
     USB.begin();
     USBSerial.begin();
     delay(10000);
-
     USBSerial.println(TAG);
-
+    
     // Mount SPIFFS for configuration files
     if (!SPIFFS.begin(true)) {
         USBSerial.println("Failed to mount SPIFFS");
@@ -403,6 +301,7 @@ void setup() {
     // Initialize module configuration
     USBSerial.println("Initializing module configuration...");
     initializeModuleInfo();
+    
     // Optionally, print the merged module info for debugging
     String moduleInfo = getModuleInfoJson();
     USBSerial.println("Module Info:");
@@ -411,65 +310,63 @@ void setup() {
     // Initialize HID handler before other components
     USBSerial.println("Initializing HID Handler...");
     initializeHIDHandler();
-
+    
     USBSerial.println("Initializing KeyHandler...");
-    initializeKeyHandler();  // Make sure this function is defined and linked
-
+    initializeKeyHandler();
+    
     USBSerial.println("Initialize LEDs");
     initializeLED();
-
+    
     USBSerial.println("Initialize Encoders");
     initializeEncoderHandler();
-
+    
     // Debug actions configuration
     debugActionsConfig();
-
-     // Set initial LED colors
-  if (strip) {
-    // Make a startup animation: all LEDs light up in sequence
-    for (int i = 0; i < numLEDs; i++) {
-      setLEDColor(i, 0, 255, 0);  // Green
-      delay(50);
-    }
-    delay(500);
     
-    // Then set them to their configured colors
-    for (int i = 0; i < numLEDs; i++) {
-      float factor = ledConfigs[i].brightness / 255.0;
-      strip->setPixelColor(i, strip->Color(
-        ledConfigs[i].r * factor,
-        ledConfigs[i].g * factor,
-        ledConfigs[i].b * factor
-      ));
+    // Set initial LED colors
+    if (strip) {
+        // Make a startup animation: all LEDs light up in sequence
+        for (int i = 0; i < numLEDs; i++) {
+            setLEDColor(i, 0, 255, 0);  // Green
+            delay(50);
+        }
+        delay(500);
+        
+        // Then set them to their configured colors
+        for (int i = 0; i < numLEDs; i++) {
+            float factor = ledConfigs[i].brightness / 255.0;
+            strip->setPixelColor(i, strip->Color(
+                ledConfigs[i].r * factor,
+                ledConfigs[i].g * factor,
+                ledConfigs[i].b * factor
+            ));
+        }
+        strip->show();
     }
-    strip->show();
-  }
-    // (Optionally, if you have additional tasks to create, add them here)
+    
+    // Create tasks ONCE here in setup
+    xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
+    xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
 }
 
 void loop() {
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 5000) {
+    if (millis() - lastPrint > 8000) {
         lastPrint = millis();
         USBSerial.println("Heartbeat...");
+        
+        // Optionally print diagnostics every 8 seconds
+        if (keyHandler) {
+            keyHandler->diagnostics();
+        }
+        if (encoderHandler) {
+            encoderHandler->diagnostics();
+        }
     }
-
-    // Update hardware handlers
-    xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
-    xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
-
-
-    // // Key handler status
-    // if (keyHandler) {
-    //   keyHandler->diagnostics();
-    // }
     
-    // // Encoder handler status
-    // if (encoderHandler) {
-    //   encoderHandler->diagnostics();
-    // }
+    // No need to call updateKeyHandler here - the task is handling it
     
-    delay(1);
+    // Give other tasks time to run
+    delay(5);
 }
-

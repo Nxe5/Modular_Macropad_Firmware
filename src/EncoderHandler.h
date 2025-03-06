@@ -6,6 +6,7 @@
 #include <AS5600.h>
 #include <Encoder.h>
 #include <map>
+#include <vector>
 #include "ConfigManager.h"
 
 // Forward declaration:
@@ -41,6 +42,19 @@ struct EncoderConfig {
     uint16_t lastRawPosition = 0;
 };
 
+// Structure to store encoder actions from configuration
+struct EncoderAction {
+    String type;  // "hid" or "multimedia"
+    
+    // HID keyboard reports
+    std::vector<uint8_t> cwHidReport;     // Clockwise HID report
+    std::vector<uint8_t> ccwHidReport;    // Counter-clockwise HID report
+    
+    // Consumer reports
+    std::vector<uint8_t> cwConsumerReport;   // Clockwise consumer report
+    std::vector<uint8_t> ccwConsumerReport;  // Counter-clockwise consumer report
+};
+
 class EncoderHandler {
 public:
     EncoderHandler(uint8_t numEncoders);
@@ -54,11 +68,7 @@ public:
     long getEncoderChange(uint8_t encoderIndex) const;
     EncoderType getEncoderType(uint8_t encoderIndex) const;
     
-    // Diagnostic methods
-    void printEncoderStates();
-    void diagnostics();
-
-    // Configuration method
+    // Configuration methods
     void configureEncoder(
         uint8_t encoderIndex, 
         EncoderType type, 
@@ -67,11 +77,18 @@ public:
         int8_t direction = 1, 
         uint16_t zeroPosition = 0
     );
+    
+    void loadEncoderActions(const std::map<String, ActionConfig>& actions);
+    
+    // Diagnostic methods
+    void printEncoderStates();
+    void diagnostics();
 
 private:
     void cleanup();
     void handleMechanicalEncoder(uint8_t encoderIndex);
     void handleAS5600Encoder(uint8_t encoderIndex);
+    void executeEncoderAction(uint8_t encoderIndex, bool clockwise);
 
     // Encoder tracking variables
     uint8_t numEncoders;

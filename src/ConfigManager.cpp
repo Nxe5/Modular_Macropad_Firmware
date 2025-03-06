@@ -114,6 +114,37 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const String &filePath
                                  action.hidReport.size(), buttonId.c_str());
                 }
             }
+            
+            // Check for encoder rotation actions (clockwise/counterclockwise)
+            if (buttonId.startsWith("encoder-")) {
+                // Clockwise action
+                if (buttonConfig.containsKey("clockwise")) {
+                    JsonVariant cwAction = buttonConfig["clockwise"];
+                    if (cwAction.is<JsonArray>()) {
+                        JsonArray cwArray = cwAction.as<JsonArray>();
+                        action.clockwise.clear();
+                        for (size_t i = 0; i < cwArray.size() && i < 8; i++) {
+                            action.clockwise.push_back(cwArray[i].as<String>());
+                        }
+                        Serial.printf("Loaded clockwise HID report with %d bytes for %s\n", 
+                                     action.clockwise.size(), buttonId.c_str());
+                    }
+                }
+                
+                // Counterclockwise action
+                if (buttonConfig.containsKey("counterclockwise")) {
+                    JsonVariant ccwAction = buttonConfig["counterclockwise"];
+                    if (ccwAction.is<JsonArray>()) {
+                        JsonArray ccwArray = ccwAction.as<JsonArray>();
+                        action.counterclockwise.clear();
+                        for (size_t i = 0; i < ccwArray.size() && i < 8; i++) {
+                            action.counterclockwise.push_back(ccwArray[i].as<String>());
+                        }
+                        Serial.printf("Loaded counterclockwise HID report with %d bytes for %s\n", 
+                                     action.counterclockwise.size(), buttonId.c_str());
+                    }
+                }
+            }
         }
         else if (action.type == "multimedia") {
             // Similar processing for multimedia reports
@@ -142,6 +173,37 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const String &filePath
                     
                     Serial.printf("Loaded Consumer report with %d bytes for %s\n", 
                                  action.consumerReport.size(), buttonId.c_str());
+                }
+            }
+            
+            // Check for encoder rotation actions for multimedia type
+            if (buttonId.startsWith("encoder-")) {
+                // Clockwise action
+                if (buttonConfig.containsKey("clockwise")) {
+                    JsonVariant cwAction = buttonConfig["clockwise"];
+                    if (cwAction.is<JsonArray>()) {
+                        JsonArray cwArray = cwAction.as<JsonArray>();
+                        action.clockwise.clear();
+                        for (size_t i = 0; i < cwArray.size() && i < 4; i++) {
+                            action.clockwise.push_back(cwArray[i].as<String>());
+                        }
+                        Serial.printf("Loaded clockwise consumer report with %d bytes for %s\n", 
+                                     action.clockwise.size(), buttonId.c_str());
+                    }
+                }
+                
+                // Counterclockwise action
+                if (buttonConfig.containsKey("counterclockwise")) {
+                    JsonVariant ccwAction = buttonConfig["counterclockwise"];
+                    if (ccwAction.is<JsonArray>()) {
+                        JsonArray ccwArray = ccwAction.as<JsonArray>();
+                        action.counterclockwise.clear();
+                        for (size_t i = 0; i < ccwArray.size() && i < 4; i++) {
+                            action.counterclockwise.push_back(ccwArray[i].as<String>());
+                        }
+                        Serial.printf("Loaded counterclockwise consumer report with %d bytes for %s\n", 
+                                     action.counterclockwise.size(), buttonId.c_str());
+                    }
                 }
             }
         }

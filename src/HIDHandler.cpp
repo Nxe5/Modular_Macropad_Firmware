@@ -95,51 +95,87 @@ bool HIDHandler::begin() {
     }
 }
 
+// Fixed sendKeyboardReport with proper const casting
 bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_KEYBOARD_REPORT_SIZE) {
         USBSerial.println("Invalid keyboard report");
         return false;
     }
+    
+    // Copy report to our state
     memcpy(keyboardState.report, report, HID_KEYBOARD_REPORT_SIZE);
+    
+    if (!tud_mounted()) {
+        USBSerial.println("USB device not mounted");
+        return false;
+    }
+    
     if (tud_hid_ready()) {
-        // Cast away const since tud_hid_keyboard_report expects a non-const pointer.
-        tud_hid_keyboard_report(0, report[0], const_cast<uint8_t*>(report + 2));
-        USBSerial.print("Keyboard report sent: ");
-        for (size_t i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
-            USBSerial.printf("%02X ", report[i]);
+        // Extract the modifier byte from report[0]
+        uint8_t modifier = report[0];
+        
+        // Create a non-const copy of the keycodes portion of the report
+        uint8_t keycodes[6];
+        memcpy(keycodes, &report[2], 6);
+        
+        // For keyboard report, we send modifier, reserved byte, and up to 6 key codes
+        bool success = tud_hid_keyboard_report(1, modifier, keycodes);
+        
+        if (success) {
+            USBSerial.print("Keyboard report sent: ");
+            for (size_t i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
+                USBSerial.printf("%02X ", report[i]);
+            }
+            USBSerial.println();
+            return true;
+        } else {
+            USBSerial.println("Failed to send keyboard report");
+            return false;
         }
-        USBSerial.println();
-        return true;
     } else {
         USBSerial.println("HID not ready to send keyboard report");
         return false;
     }
 }
 
-
+// Fixed sendConsumerReport with proper type handling
 bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_CONSUMER_REPORT_SIZE) {
         USBSerial.println("Invalid consumer report");
         return false;
     }
+    
+    // Copy report to our state
     memcpy(consumerState.report, report, HID_CONSUMER_REPORT_SIZE);
+    
+    if (!tud_mounted()) {
+        USBSerial.println("USB device not mounted");
+        return false;
+    }
+    
     if (tud_hid_ready()) {
-        // For the consolidated consumer report, use instance 1 directly
-        // instead of using a report ID
+        // For consumer control, combine the first two bytes to create a 16-bit code
         uint16_t consumerCode = (report[0] | (report[1] << 8));
-        tud_hid_report(1, report, length);
-        USBSerial.print("Consumer report sent: ");
-        for (size_t i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
-            USBSerial.printf("%02X ", report[i]);
+        
+        // Send the consumer code (this function expects a non-const pointer)
+        bool success = tud_hid_report(0, &consumerCode, sizeof(consumerCode));
+        
+        if (success) {
+            USBSerial.print("Consumer report sent: ");
+            for (size_t i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                USBSerial.printf("%02X ", report[i]);
+            }
+            USBSerial.println();
+            return true;
+        } else {
+            USBSerial.println("Failed to send consumer report");
+            return false;
         }
-        USBSerial.println();
-        return true;
     } else {
         USBSerial.println("HID not ready to send consumer report");
         return false;
     }
 }
-
 
 bool HIDHandler::sendEmptyKeyboardReport() {
     uint8_t emptyReport[HID_KEYBOARD_REPORT_SIZE] = {0};

@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <Keypad.h>
 #include <map>
+#include <vector>
 #include "ConfigManager.h"
 
 // Constants
@@ -38,13 +39,12 @@ struct KeyConfig {
 
 class KeyHandler {
 public:
-    KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping,
-               uint8_t* rowPins, uint8_t* colPins);
+    KeyHandler(uint8_t rows, uint8_t cols, 
+              const std::vector<Component>& components,
+              uint8_t* rowPins, uint8_t* colPins);
     ~KeyHandler();
     
     void begin();
-    char getKey();
-    bool isKeyPressed(char key);
     uint8_t getTotalKeys();
     void updateKeys();
     void loadKeyConfiguration(const std::map<String, ActionConfig>& actions);
@@ -55,19 +55,31 @@ public:
     
 private:
     void cleanup();
-    void handleKeyEvent(uint8_t keyIndex, bool pressed);
     void executeAction(uint8_t keyIndex, KeyAction action);
     
     uint8_t numRows;
     uint8_t numCols;
-    char** keyMap;
     uint8_t* rowPins;
     uint8_t* colPins;
     Keypad* keypad;
     KeyConfig* actionMap;
-    bool keyStates[MAX_KEYS];
-    unsigned long lastDebounceTime[MAX_KEYS];
-    KeyAction lastAction[MAX_KEYS];
+    
+    // Direct position mapping
+    struct ComponentPosition {
+        uint8_t row;
+        uint8_t col;
+        String id;
+        bool operator<(const ComponentPosition& other) const {
+            if (row != other.row) return row < other.row;
+            return col < other.col;
+        }
+    };
+    std::vector<ComponentPosition> componentPositions;
+    
+    // Dynamic arrays for key states
+    bool* keyStates;
+    unsigned long* lastDebounceTime;
+    KeyAction* lastAction;
     const unsigned long debounceDelay = 50;
 };
 

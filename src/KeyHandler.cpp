@@ -6,82 +6,79 @@
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 #include <USBCDC.h>
+#include <algorithm> // For std::sort
 
 extern USBCDC USBSerial;
 
 KeyHandler* keyHandler = nullptr;
 
-KeyHandler::KeyHandler(uint8_t rows, uint8_t cols, char** keyMapping, 
-                       uint8_t* rows_pins, uint8_t* colPins) 
-{
-    // Initialize member variables in the constructor body
+KeyHandler::KeyHandler(uint8_t rows, uint8_t cols, 
+                     const std::vector<Component>& components,
+                     uint8_t* rowsPins, uint8_t* colPins) {
+    // Initialize member variables
     numRows = rows;
     numCols = cols;
-    keyMap = nullptr;
     rowPins = nullptr;
     this->colPins = nullptr;
     keypad = nullptr;
     actionMap = nullptr;
+    keyStates = nullptr;
+    lastDebounceTime = nullptr;
+    lastAction = nullptr;
 
-    // Strict bounds checking
+    // Validate input parameters
     if (rows > 10 || cols > 10) {
         USBSerial.println("Error: Matrix dimensions too large");
         return;
     }
 
-    // Validate input pointers
-    if (!keyMapping || !rows_pins || !colPins) {
-        USBSerial.println("Error: Null input pointers");
-        return;
-    }
-
-    // Use placement new or carefully managed dynamic allocation
     try {
-        // Allocate key map with careful bounds checking
-        keyMap = new char*[rows];
-        for (uint8_t i = 0; i < rows; i++) {
-            keyMap[i] = new char[cols];
-            
-            // Deep copy with bounds checking
-            for (uint8_t j = 0; j < cols; j++) {
-                keyMap[i][j] = (keyMapping[i][j] != '\0') ? keyMapping[i][j] : 'X';
-            }
-        }
-        
         // Allocate pin arrays
         rowPins = new uint8_t[rows];
         this->colPins = new uint8_t[cols];
         
-        // Safely copy pin arrays
-        memcpy(rowPins, rows_pins, rows * sizeof(uint8_t));
+        // Copy pin arrays
+        memcpy(rowPins, rowsPins, rows * sizeof(uint8_t));
         memcpy(this->colPins, colPins, cols * sizeof(uint8_t));
         
-        // Create flattened keymap for Keypad library
-        char* flatKeymap = new char[rows * cols];
-        
-        for (uint8_t i = 0; i < rows; i++) {
-            for (uint8_t j = 0; j < cols; j++) {
-                flatKeymap[i * cols + j] = keyMap[i][j];
+        // Store component positions for direct lookup
+        for (const Component& comp : components) {
+            if (comp.type == "button" || 
+                (comp.type == "encoder" && comp.withButton)) {
+                ComponentPosition pos;
+                pos.row = comp.startRow;
+                pos.col = comp.startCol;
+                pos.id = comp.id;
+                componentPositions.push_back(pos);
+                
+                USBSerial.printf("Mapped component %s to position [%d,%d]\n", 
+                              comp.id.c_str(), pos.row, pos.col);
             }
         }
         
-        // Initialize keypad with careful error handling
-        keypad = new Keypad(flatKeymap, rowPins, this->colPins, rows, cols);
+        // Sort positions for better lookup performance
+        std::sort(componentPositions.begin(), componentPositions.end());
         
-        // Configure keypad with safe defaults
-        keypad->setDebounceTime(50);
-        keypad->setHoldTime(500);
+        // Create key states array of sufficient size
+        uint8_t totalKeys = componentPositions.size();
+        keyStates = new bool[totalKeys]();
+        lastDebounceTime = new unsigned long[totalKeys]();
+        lastAction = new KeyAction[totalKeys]();
         
-        // Allocate action map with careful sizing
-        uint8_t totalKeys = getTotalKeys();
+        // Create action map
         actionMap = new KeyConfig[totalKeys];
+        memset(actionMap, 0, totalKeys * sizeof(KeyConfig));
         
-        // Zero-initialize key states
-        memset(keyStates, 0, sizeof(keyStates));
-        memset(lastDebounceTime, 0, sizeof(lastDebounceTime));
-        memset(lastAction, 0, sizeof(lastAction));
+        USBSerial.printf("KeyHandler initialized with %d keys\n", totalKeys);
         
-        USBSerial.printf("KeyHandler initialized successfully. Total keys: %d\n", totalKeys);
+        // Debug print all component positions
+        USBSerial.println("\nComponent Position Map:");
+        for (size_t i = 0; i < componentPositions.size(); i++) {
+            USBSerial.printf("%d: %s at [%d,%d]\n", i, 
+                          componentPositions[i].id.c_str(),
+                          componentPositions[i].row,
+                          componentPositions[i].col);
+        }
     } 
     catch (const std::exception& e) {
         USBSerial.printf("Exception in constructor: %s\n", e.what());
@@ -98,15 +95,6 @@ KeyHandler::~KeyHandler() {
 }
 
 void KeyHandler::cleanup() {
-    // Free dynamically allocated memory
-    if (keyMap) {
-        for (uint8_t i = 0; i < numRows; i++) {
-            delete[] keyMap[i];
-        }
-        delete[] keyMap;
-        keyMap = nullptr;
-    }
-    
     if (rowPins) {
         delete[] rowPins;
         rowPins = nullptr;
@@ -126,209 +114,103 @@ void KeyHandler::cleanup() {
         delete[] actionMap;
         actionMap = nullptr;
     }
+    
+    if (keyStates) {
+        delete[] keyStates;
+        keyStates = nullptr;
+    }
+    
+    if (lastDebounceTime) {
+        delete[] lastDebounceTime;
+        lastDebounceTime = nullptr;
+    }
+    
+    if (lastAction) {
+        delete[] lastAction;
+        lastAction = nullptr;
+    }
+    
+    componentPositions.clear();
 }
 
 void KeyHandler::begin() {
-    if (!keypad) {
-        USBSerial.println("Error: Keypad not initialized in begin()");
-        return;
-    }
-    
     try {
-        // NOTE: We're not changing pin modes here anymore since they're already
-        // configured in configurePinModes() - this prevents conflicts
-        
         USBSerial.println("KeyHandler initialization complete - using configuration from configurePinModes()");
-        
-        // Configure the keypad library's settings
-        if (keypad) {
-            keypad->setDebounceTime(DEBOUNCE_TIME);
-            keypad->setHoldTime(500);
-            USBSerial.println("Keypad library configured with debounce time: " + String(DEBOUNCE_TIME) + "ms");
-        }
     } 
     catch (...) {
         USBSerial.println("Error in KeyHandler::begin()");
     }
 }
 
-char KeyHandler::getKey() {
-    if (!keypad) return NO_KEY;
-    
-    char key = keypad->getKey();
-    return (key == 'X') ? NO_KEY : key;
-}
-
-void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
-    if (keyIndex >= getTotalKeys() || !actionMap) {
-        return;
-    }
-    
-    const KeyConfig& config = actionMap[keyIndex];
-    
-    // Enhanced debug information
-    USBSerial.printf("KeyHandler: Executing action for key %d, type=%d (%s), action=%s\n", 
-                  keyIndex, config.type, 
-                  config.type == ACTION_HID ? "HID" : 
-                  config.type == ACTION_MULTIMEDIA ? "MULTIMEDIA" : 
-                  config.type == ACTION_MACRO ? "MACRO" : 
-                  config.type == ACTION_LAYER ? "LAYER" : "UNKNOWN",
-                  action == KEY_PRESS ? "PRESS" : "RELEASE");
-    
-    // Process based on action type and key action (press/release)
-    switch (config.type) {
-            
-        case ACTION_MULTIMEDIA:
-            if (action == KEY_PRESS) {
-                // More detailed debugging
-                USBSerial.print("Multimedia Report (Press): ");
-                for (int i = 0; i < 4; i++) {
-                    USBSerial.printf("%02X ", config.consumerReport[i]);
-                }
-                USBSerial.println();
-                USBSerial.println("Sending to HIDHandler::sendConsumerReport...");
-
-                // For key press, send the configured consumer report
-                if (hidHandler) {
-                    bool sent = hidHandler->sendConsumerReport(config.consumerReport);
-                    USBSerial.printf("Consumer report sent: %s\n", sent ? "SUCCESS" : "FAILED");
-                } else {
-                    USBSerial.println("ERROR: hidHandler is NULL!");
-                }
-            }
-            break;  // Add this break statement to prevent fall-through
-
-        case ACTION_MACRO:
-            if (action == KEY_PRESS && !config.macroId.isEmpty()) {
-                // Only execute macro on key press
-                USBSerial.printf("Executing macro: %s\n", config.macroId.c_str());
-                
-                if (hidHandler) {
-                    hidHandler->executeMacro(config.macroId.c_str());
-                }
-            }
-            break;
-            
-        case ACTION_LAYER:
-            // Layer switching would be handled by your layer management logic
-            if (action == KEY_PRESS && !config.targetLayer.isEmpty()) {
-                USBSerial.printf("Switching to layer: %s\n", config.targetLayer.c_str());
-                // Call your layer switching function here
-                // switchToLayer(config.targetLayer);
-            }
-            break;
-            
-        case ACTION_NONE:
-        default:
-            // No action configured or unknown action type
-            USBSerial.printf("No action configured for key %d\n", keyIndex);
-            break;
-    }
-}
-
-
-bool KeyHandler::isKeyPressed(char key) {
-    if (!keypad) return false;
-    return keypad->isPressed(key) && key != 'X';
-}
-
 uint8_t KeyHandler::getTotalKeys() {
-    uint8_t count = 0;
-    for (uint8_t r = 0; r < numRows; r++) {
-        for (uint8_t c = 0; c < numCols; c++) {
-            if (keyMap[r][c] != 'X') {
-                count++;
-            }
-        }
-    }
-    return count;
+    return componentPositions.size();
 }
-
-// Updated method for KeyHandler class to properly handle different JSON formats
-// Add this to your KeyHandler.cpp file
 
 void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& actions) {
-    uint8_t totalKeys = getTotalKeys();
+    uint8_t totalKeys = componentPositions.size();
     
-    // Extensive logging and error checking
+    // Clear all configurations
+    for (uint8_t i = 0; i < totalKeys; i++) {
+        actionMap[i].type = ACTION_NONE;
+        memset(actionMap[i].hidReport, 0, sizeof(actionMap[i].hidReport));
+        memset(actionMap[i].consumerReport, 0, sizeof(actionMap[i].consumerReport));
+        actionMap[i].macroId = "";
+        actionMap[i].targetLayer = "";
+    }
+    
     USBSerial.printf("Loading key configuration for %d keys\n", totalKeys);
     
+    // Load configurations for each component
     for (uint8_t i = 0; i < totalKeys; i++) {
-        String buttonId = "button-" + String(i + 1);
+        String id = componentPositions[i].id;
         
-        try {
-            if (actions.find(buttonId) != actions.end()) {
-                ActionConfig ac = actions.at(buttonId);
+        // Check if we have actions for this component
+        if (actions.find(id) != actions.end()) {
+            const ActionConfig& ac = actions.at(id);
+            
+            USBSerial.printf("Configuring %s with action type: %s\n", 
+                          id.c_str(), ac.type.c_str());
+            
+            if (ac.type == "hid") {
+                actionMap[i].type = ACTION_HID;
                 
-                // Detailed action type logging
-                USBSerial.printf("Configuring %s with action type: %s\n", 
-                              buttonId.c_str(), ac.type.c_str());
-                
-                if (ac.type == "hid") {
-                    actionMap[i].type = ACTION_HID;
-                    
-                    // Build the HID report from the parsed action
-                    uint8_t hidReport[8] = {0};
-                    
-                    // First try to convert directly from our vector of hex strings
-                    if (!ac.hidReport.empty()) {
-                        if (HIDHandler::hexReportToBinary(ac.hidReport, hidReport, 8)) {
-                            // Copy to our action map
-                            memcpy(actionMap[i].hidReport, hidReport, 8);
-                            
-                            // Debug output
-                            USBSerial.printf("HID report for %s: ", buttonId.c_str());
-                            for (int j = 0; j < 8; j++) {
-                                USBSerial.printf("%02X ", actionMap[i].hidReport[j]);
-                            }
-                            USBSerial.println();
-                        } else {
-                            USBSerial.printf("Failed to convert HID report for %s\n", buttonId.c_str());
+                if (!ac.hidReport.empty()) {
+                    if (HIDHandler::hexReportToBinary(ac.hidReport, actionMap[i].hidReport, 8)) {
+                        USBSerial.printf("HID report for %s: ", id.c_str());
+                        for (int j = 0; j < 8; j++) {
+                            USBSerial.printf("%02X ", actionMap[i].hidReport[j]);
                         }
+                        USBSerial.println();
                     } else {
-                        USBSerial.printf("No HID report data for %s\n", buttonId.c_str());
+                        USBSerial.printf("Failed to convert HID report for %s\n", id.c_str());
                     }
                 }
-                else if (ac.type == "multimedia") {
-                    actionMap[i].type = ACTION_MULTIMEDIA;
-                    
-                    // Similar conversion for consumer report
-                    uint8_t consumerReport[4] = {0};
-                    
-                    if (!ac.consumerReport.empty()) {
-                        if (HIDHandler::hexReportToBinary(ac.consumerReport, consumerReport, 4)) {
-                            memcpy(actionMap[i].consumerReport, consumerReport, 4);
-                            
-                            // Debug output
-                            USBSerial.printf("Consumer report for %s: ", buttonId.c_str());
-                            for (int j = 0; j < 4; j++) {
-                                USBSerial.printf("%02X ", actionMap[i].consumerReport[j]);
-                            }
-                            USBSerial.println();
-                        } else {
-                            USBSerial.printf("Failed to convert Consumer report for %s\n", buttonId.c_str());
+            } 
+            else if (ac.type == "multimedia") {
+                actionMap[i].type = ACTION_MULTIMEDIA;
+                
+                if (!ac.consumerReport.empty()) {
+                    if (HIDHandler::hexReportToBinary(ac.consumerReport, actionMap[i].consumerReport, 4)) {
+                        USBSerial.printf("Consumer report for %s: ", id.c_str());
+                        for (int j = 0; j < 4; j++) {
+                            USBSerial.printf("%02X ", actionMap[i].consumerReport[j]);
                         }
+                        USBSerial.println();
                     } else {
-                        USBSerial.printf("No Consumer report data for %s\n", buttonId.c_str());
+                        USBSerial.printf("Failed to convert Consumer report for %s\n", id.c_str());
                     }
-                }
-                else if (ac.type == "macro") {
-                    actionMap[i].type = ACTION_MACRO;
-                    actionMap[i].macroId = ac.macroId;
-                    USBSerial.printf("Set macro ID for %s: %s\n", 
-                                  buttonId.c_str(), actionMap[i].macroId.c_str());
-                }
-                else if (ac.type == "layer") {
-                    actionMap[i].type = ACTION_LAYER;
-                    actionMap[i].targetLayer = ac.targetLayer;
-                    USBSerial.printf("Set target layer for %s: %s\n", 
-                                  buttonId.c_str(), actionMap[i].targetLayer.c_str());
                 }
             }
-        } 
-        catch (const std::exception& e) {
-            USBSerial.printf("Error loading configuration for %s: %s\n", 
-                          buttonId.c_str(), e.what());
+            else if (ac.type == "macro") {
+                actionMap[i].type = ACTION_MACRO;
+                actionMap[i].macroId = ac.macroId;
+            }
+            else if (ac.type == "layer") {
+                actionMap[i].type = ACTION_LAYER;
+                actionMap[i].targetLayer = ac.targetLayer;
+            }
+        } else {
+            USBSerial.printf("No action configured for %s\n", id.c_str());
         }
     }
     
@@ -336,13 +218,14 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
 }
 
 void KeyHandler::updateKeys() {
-    // Use a reversed scanning method that works well with diode–protected keys.
     static unsigned long lastScan = 0;
     const unsigned long scanInterval = 20; // scan every 20ms
-    if (millis() - lastScan < scanInterval) return;
-    lastScan = millis();
+    unsigned long now = millis();
     
-    // Configure rows as OUTPUT and columns as INPUT_PULLUP:
+    if (now - lastScan < scanInterval) return;
+    lastScan = now;
+    
+    // Configure rows as OUTPUT and columns as INPUT_PULLUP
     for (uint8_t r = 0; r < numRows; r++) {
         pinMode(rowPins[r], OUTPUT);
         digitalWrite(rowPins[r], HIGH); // Initially high (inactive)
@@ -351,141 +234,149 @@ void KeyHandler::updateKeys() {
         pinMode(colPins[c], INPUT_PULLUP);
     }
     
-    // Scan one row at a time:
+    // Scan all rows
     for (uint8_t r = 0; r < numRows; r++) {
         // Drive current row LOW
         digitalWrite(rowPins[r], LOW);
         delayMicroseconds(50); // Allow signals to stabilize
         
-        // Check each column on this row:
+        // Check columns
         for (uint8_t c = 0; c < numCols; c++) {
-            uint8_t keyIndex = r * numCols + c;
+            // Find component at this position
+            int componentIndex = -1;
+            for (size_t i = 0; i < componentPositions.size(); i++) {
+                if (componentPositions[i].row == r && componentPositions[i].col == c) {
+                    componentIndex = i;
+                    break;
+                }
+            }
+            
+            // Skip positions without components
+            if (componentIndex == -1) continue;
+            
             bool currentReading = (digitalRead(colPins[c]) == LOW);
             
-            // Debouncing: check if the reading remains consistent for DEBOUNCE_TIME
-            if (millis() - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) {
+            // Debouncing
+            if (now - lastDebounceTime[componentIndex] < DEBOUNCE_TIME) {
                 continue;
             }
             
-            // If the key state has changed, update our state and handle the event
-            if (currentReading != keyStates[keyIndex]) {
-                lastDebounceTime[keyIndex] = millis();
-                keyStates[keyIndex] = currentReading;
+            // Process state change
+            if (currentReading != keyStates[componentIndex]) {
+                lastDebounceTime[componentIndex] = now;
+                keyStates[componentIndex] = currentReading;
                 
-                // Map the matrix coordinate (r,c) to a button ID using your keyMap
-                char keyChar = keyMap[r][c];
-                String buttonId;
-                if (keyChar >= '1' && keyChar <= '9') {
-                    buttonId = "button-" + String(keyChar - '0');
-                } else if (keyChar >= 'A' && keyChar <= 'Z') {
-                    int buttonNum = (keyChar - 'A') + 10;
-                    buttonId = "button-" + String(buttonNum);
-                } else if (keyChar >= 'a' && keyChar <= 'z') {
-                    int encoderNum = (keyChar - 'a') + 1;
-                    buttonId = "encoder-" + String(encoderNum);
-                } else {
-                    buttonId = "unknown-" + String(keyIndex);
-                }
+                String componentId = componentPositions[componentIndex].id;
                 
-                // Log and sync LED feedback
+                // Log the event
                 USBSerial.printf("Key event: Row %d, Col %d, ID=%s, State=%s\n", 
-                              r, c, buttonId.c_str(), currentReading ? "PRESSED" : "RELEASED");
-                syncLEDsWithButtons(buttonId.c_str(), currentReading);
+                              r, c, componentId.c_str(), 
+                              currentReading ? "PRESSED" : "RELEASED");
                 
-                // Determine the action type based on press/release
+                // Sync LEDs
+                syncLEDsWithButtons(componentId.c_str(), currentReading);
+                
+                // Execute action
                 KeyAction action = currentReading ? KEY_PRESS : KEY_RELEASE;
-                if (lastAction[keyIndex] != action) {
-                    lastAction[keyIndex] = action;
-                    executeAction(keyIndex, action);
+                if (lastAction[componentIndex] != action) {
+                    lastAction[componentIndex] = action;
+                    executeAction(componentIndex, action);
                 }
             }
         }
-        // Set the row back to inactive
+        
+        // Set row back to inactive
         digitalWrite(rowPins[r], HIGH);
     }
 }
 
-void KeyHandler::handleKeyEvent(uint8_t keyIndex, bool pressed) {
-    unsigned long currentTime = millis();
-    
-    // Ensure keyIndex is valid
-    if (keyIndex >= MAX_KEYS) {
-        USBSerial.printf("Invalid key index: %d (exceeds MAX_KEYS)\n", keyIndex);
+void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
+    if (keyIndex >= componentPositions.size() || !actionMap) {
+        USBSerial.printf("Invalid key index: %d\n", keyIndex);
         return;
     }
     
-    // Debounce logic
-    if (currentTime - lastDebounceTime[keyIndex] < DEBOUNCE_TIME) {
-        return;
-    }
-    lastDebounceTime[keyIndex] = currentTime;
+    const ComponentPosition& pos = componentPositions[keyIndex];
+    const KeyConfig& config = actionMap[keyIndex];
     
-    // State change check - only react to changes
-    if (keyStates[keyIndex] == pressed) {
-        return;
-    }
-    keyStates[keyIndex] = pressed;
+    // Print detailed action info
+    USBSerial.printf("KeyHandler: Executing action for %s at [%d,%d], type=%d (%s), action=%s\n", 
+                  pos.id.c_str(), pos.row, pos.col, config.type,
+                  config.type == ACTION_HID ? "HID" : 
+                  config.type == ACTION_MULTIMEDIA ? "MULTIMEDIA" : 
+                  config.type == ACTION_MACRO ? "MACRO" : 
+                  config.type == ACTION_LAYER ? "LAYER" : "UNKNOWN",
+                  action == KEY_PRESS ? "PRESS" : "RELEASE");
     
-    // Find the actual button ID from the component configuration for this key
-    // This ensures we're using the correct button ID for actions
-    char keyChar = '\0';
-    for (int r = 0; r < numRows; r++) {
-        for (int c = 0; c < numCols; c++) {
-            if (r * numCols + c == keyIndex && keyMap[r][c] != 'X') {
-                keyChar = keyMap[r][c];
-                break;
+    switch (config.type) {
+        case ACTION_HID:
+            if (action == KEY_PRESS) {
+                USBSerial.print("HID Report: ");
+                for (int i = 0; i < 8; i++) {
+                    USBSerial.printf("%02X ", config.hidReport[i]);
+                }
+                USBSerial.println();
+                
+                if (hidHandler) {
+                    bool sent = hidHandler->sendKeyboardReport(config.hidReport);
+                    USBSerial.printf("HID report sent: %s\n", sent ? "SUCCESS" : "FAILED");
+                }
+            } else if (action == KEY_RELEASE) {
+                if (hidHandler) {
+                    hidHandler->sendEmptyKeyboardReport();
+                }
             }
-        }
-        if (keyChar != '\0') break;
-    }
-    
-    String buttonId;
-    
-    // Handle different character ranges for different component types
-    if (keyChar >= '1' && keyChar <= '9') {
-        // Regular buttons 1-9
-        buttonId = "button-" + String(keyChar - '0');
-    } 
-    else if (keyChar >= 'A' && keyChar <= 'Z') {
-        // Buttons 10-35
-        int buttonNum = (keyChar - 'A') + 10;
-        buttonId = "button-" + String(buttonNum);
-    } 
-    else if (keyChar >= 'a' && keyChar <= 'z') {
-        // Encoders (lowercase letters represent encoders)
-        int encoderNum = (keyChar - 'a') + 1;
-        buttonId = "encoder-" + String(encoderNum);
-    } 
-    else {
-        // Fallback for any unexpected characters
-        buttonId = "unknown-" + String(keyIndex);
-    }
-    
-    // Log detailed information for debugging
-    USBSerial.printf("Key event: Index=%d, Char='%c', ID=%s, State=%s\n", 
-                 keyIndex, keyChar ? keyChar : 'X', buttonId.c_str(), 
-                 pressed ? "PRESSED" : "RELEASED");
-    
-    // Sync LEDs with button state if function is available
-    syncLEDsWithButtons(buttonId.c_str(), pressed);
-    
-    // Determine action
-    KeyAction action = pressed ? KEY_PRESS : KEY_RELEASE;
-    if (lastAction[keyIndex] != action) {
-        lastAction[keyIndex] = action;
-        executeAction(keyIndex, action);
+            break;
+            
+        case ACTION_MULTIMEDIA:
+            if (action == KEY_PRESS) {
+                USBSerial.print("Multimedia Report: ");
+                for (int i = 0; i < 4; i++) {
+                    USBSerial.printf("%02X ", config.consumerReport[i]);
+                }
+                USBSerial.println();
+                
+                if (hidHandler) {
+                    bool sent = hidHandler->sendConsumerReport(config.consumerReport);
+                    USBSerial.printf("Consumer report sent: %s\n", sent ? "SUCCESS" : "FAILED");
+                }
+            } else if (action == KEY_RELEASE) {
+                if (hidHandler) {
+                    hidHandler->sendEmptyConsumerReport();
+                }
+            }
+            break;
+            
+        case ACTION_MACRO:
+            if (action == KEY_PRESS && !config.macroId.isEmpty()) {
+                if (hidHandler) {
+                    hidHandler->executeMacro(config.macroId.c_str());
+                }
+            }
+            break;
+            
+        case ACTION_LAYER:
+            if (action == KEY_PRESS && !config.targetLayer.isEmpty()) {
+                // Layer switching code goes here
+            }
+            break;
+            
+        case ACTION_NONE:
+        default:
+            USBSerial.printf("No action configured for key %d\n", keyIndex);
+            break;
     }
 }
 
 void KeyHandler::printKeyboardState() {
     USBSerial.println("\n--- Keyboard Matrix State ---");
-    for (uint8_t r = 0; r < numRows; r++) {
-        for (uint8_t c = 0; c < numCols; c++) {
-            char key = keyMap[r][c];
-            bool isPressed = (key != 'X') && isKeyPressed(key);
-            USBSerial.printf("[%c:%s] ", key, isPressed ? "ON" : "  ");
-        }
-        USBSerial.println();
+    for (size_t i = 0; i < componentPositions.size(); i++) {
+        const ComponentPosition& pos = componentPositions[i];
+        USBSerial.printf("%s at [%d,%d]: %s\n", 
+                      pos.id.c_str(), 
+                      pos.row, 
+                      pos.col, 
+                      keyStates[i] ? "PRESSED" : "RELEASED");
     }
     USBSerial.println("----------------------------\n");
 }
