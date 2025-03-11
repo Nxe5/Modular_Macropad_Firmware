@@ -1,7 +1,9 @@
 #include <Arduino.h>
-#include <USB.h>
 #include <USBCDC.h>
-#include <USBHIDMouse.h>
+#include "USBServer.h"
+#include "esp_netif.h"
+#include "lwip/ip_addr.h"
+#include "lwip/inet.h"
 
 #include "FS.h"
 #include "SPIFFS.h"
@@ -284,6 +286,25 @@ void encoderTask(void *pvParameters) {
     }
 }
 
+// Add this function to display network status
+void displayNetworkStatus() {
+    static unsigned long lastNetworkStatusTime = 0;
+    const unsigned long NETWORK_STATUS_INTERVAL = 30000; // 30 seconds
+    
+    if (millis() - lastNetworkStatusTime >= NETWORK_STATUS_INTERVAL) {
+        lastNetworkStatusTime = millis();
+        
+        USBSerial.println("\n=== USB CDC Network Status ===");
+        USBSerial.printf("Device Hostname: %s\n", HOSTNAME);
+        USBSerial.printf("IP Address: 192.168.7.1\n");
+        USBSerial.println("Access methods:");
+        USBSerial.printf("  http://%s.local (requires mDNS)\n", HOSTNAME);
+        USBSerial.printf("  http://%s (requires NetBIOS)\n", HOSTNAME);
+        USBSerial.println("  http://192.168.7.1 (always works)");
+        USBSerial.println("==============================\n");
+    }
+}
+
 void setup() {
     // Initialize USB with both HID and CDC
     USB.begin();
@@ -323,9 +344,17 @@ void setup() {
     
     USBSerial.println("Initialize Encoders");
     initializeEncoderHandler();
-    
+
+    // Configuring Static IP
+    // Initialize the USB CDC web server.
+    USBSerial.println("Initialize Configure USB Static IP");
+    initUSBServer();
+
+
     // Debug actions configuration
     debugActionsConfig();
+
+ 
     
     // Set initial LED colors
     if (strip) {
@@ -351,9 +380,15 @@ void setup() {
     // Create tasks ONCE here in setup
     xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
+
+
 }
 
 void loop() {
+    
+    // Display network status periodically
+    displayNetworkStatus();
+
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 8000) {
