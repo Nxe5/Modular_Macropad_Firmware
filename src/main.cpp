@@ -349,8 +349,11 @@ void setup() {
     if (strip) {
         // Make a startup animation: all LEDs light up in sequence
         for (int i = 0; i < numLEDs; i++) {
-            setLEDColor(i, 0, 255, 0);  // Green
-            delay(50);
+            // Turn on just the current LED
+            strip->clear();  // Turn off all LEDs
+            strip->setPixelColor(i, strip->Color(0, 255, 0));  // Set just this one green
+            strip->show();
+            delay(55);  // Slightly longer delay
         }
         delay(500);
         
