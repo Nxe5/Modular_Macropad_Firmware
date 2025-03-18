@@ -29,6 +29,10 @@ USBHIDConsumerControl ConsumerControl;
 USBHIDMouse Mouse;  // Optional if you need mouse controls
 USBCDC USBSerial;
 
+// Flag to indicate if USB server should be initialized
+// IMPORTANT: Set this to false to disable USB server completely
+bool enableUsbServer = true;  // CHANGE TO TRUE WHEN YOU'RE READY TO TEST USB SERVER
+
 #define TAG "HID+CDC Esp32-s3 Macropad"
 
 //  Will be moved to info.json
@@ -286,6 +290,42 @@ void encoderTask(void *pvParameters) {
     }
 }
 
+// Separate task for USB Server to avoid blocking the main functionality
+void usbServerTask(void *pvParameters) {
+    const int retryDelay = 10000; // 10 seconds
+    
+    // Give the system time to boot up fully
+    vTaskDelay(pdMS_TO_TICKS(15000)); // Wait 15 seconds before first attempt
+    
+    USBSerial.println("Starting USB Server initialization task");
+    
+    while (true) {
+        if (enableUsbServer) {
+            USBSerial.println("Attempting to initialize USB Server...");
+            
+            // Try to initialize, but don't let it block indefinitely
+            try {
+                initUSBServer();
+                USBSerial.println("USB Server initialization attempted");
+            } catch (...) {
+                USBSerial.println("Exception during USB Server initialization");
+            }
+            
+            // Update USB server periodically
+            try {
+                updateUSBServer();
+            } catch (...) {
+                USBSerial.println("Exception during USB Server update");
+            }
+        } else {
+            USBSerial.println("USB Server disabled by configuration");
+        }
+        
+        // Wait before next retry
+        vTaskDelay(pdMS_TO_TICKS(retryDelay));
+    }
+}
+
 // Add this function to display network status
 void displayNetworkStatus() {
     static unsigned long lastNetworkStatusTime = 0;
@@ -294,14 +334,15 @@ void displayNetworkStatus() {
     if (millis() - lastNetworkStatusTime >= NETWORK_STATUS_INTERVAL) {
         lastNetworkStatusTime = millis();
         
-        USBSerial.println("\n=== USB CDC Network Status ===");
-        USBSerial.printf("Device Hostname: %s\n", HOSTNAME);
-        USBSerial.printf("IP Address: 192.168.7.1\n");
-        USBSerial.println("Access methods:");
-        USBSerial.printf("  http://%s.local (requires mDNS)\n", HOSTNAME);
-        USBSerial.printf("  http://%s (requires NetBIOS)\n", HOSTNAME);
-        USBSerial.println("  http://192.168.7.1 (always works)");
-        USBSerial.println("==============================\n");
+        USBSerial.println("\n=== Device Status ===");
+        if (enableUsbServer) {
+            USBSerial.printf("USB Server: Enabled\n");
+            USBSerial.printf("Device Hostname: %s\n", HOSTNAME);
+            USBSerial.println("===================\n");
+        } else {
+            USBSerial.println("USB Server: Disabled");
+            USBSerial.println("===================\n");
+        }
     }
 }
 
@@ -310,11 +351,15 @@ void setup() {
     USB.begin();
     USBSerial.begin();
 
-    delay(10000);
-
-    ConsumerControl.begin();
+    // Wait a bit for Serial to initialize
+    delay(8000);
 
     USBSerial.println(TAG);
+    USBSerial.println("Starting device initialization");
+    
+    // Initialize HID components
+    ConsumerControl.begin();
+    USBSerial.println("HID Consumer Control initialized");
     
     // Mount SPIFFS for configuration files
     if (!SPIFFS.begin(true)) {
@@ -345,16 +390,8 @@ void setup() {
     USBSerial.println("Initialize Encoders");
     initializeEncoderHandler();
 
-    // Configuring Static IP
-    // Initialize the USB CDC web server.
-    USBSerial.println("Initialize Configure USB Static IP");
-    initUSBServer();
-
-
     // Debug actions configuration
     debugActionsConfig();
-
- 
     
     // Set initial LED colors
     if (strip) {
@@ -377,16 +414,24 @@ void setup() {
         strip->show();
     }
     
-    // Create tasks ONCE here in setup
+    // Create tasks for keyboard and encoder handling
     xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
+    
+    // Create a separate task for USB Server with lower priority
+    // This ensures it won't interfere with core functionality
+    if (enableUsbServer) {
+        USBSerial.println("USB Server enabled - creating task");
+        xTaskCreate(usbServerTask, "usb_server_task", 8192, NULL, 1, NULL);
+    } else {
+        USBSerial.println("USB Server disabled - skipping initialization");
+    }
 
-
+    USBSerial.println("Setup complete - entering main loop");
 }
 
 void loop() {
-    
-    // Display network status periodically
+    // Display status periodically
     displayNetworkStatus();
 
     // Minimal loop - print a heartbeat every 5 seconds

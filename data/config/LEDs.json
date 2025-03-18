@@ -2,9 +2,9 @@
   "leds": {
     "layer-name": "default-led-layer",
     "active": true,
-    "pin": 38,
+    "pin": 7,
     "type": "sk6812",
-    "brightness": 50,
+    "brightness": 0,
     "animation": {
       "active": false,
       "mode": 0,
@@ -22,7 +22,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -36,7 +36,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -50,7 +50,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -64,7 +64,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -78,7 +78,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -92,7 +92,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -106,7 +106,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -120,7 +120,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -134,7 +134,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -148,7 +148,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -162,7 +162,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -176,7 +176,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -190,7 +190,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -204,7 +204,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -218,7 +218,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -232,7 +232,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -246,7 +246,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       },
       {
@@ -260,7 +260,7 @@
           "g": 255,
           "b": 0
         },
-        "brightness": 50,
+        "brightness": 0,
         "mode": 0
       }
     ]

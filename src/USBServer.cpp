@@ -11,165 +11,217 @@
 // USBCDC serial for debugging output
 extern USBCDC USBSerial;
 
+
 // Create an asynchronous web server on port 80.
 AsyncWebServer server(80);
 
-//
-// Helper function: Configures the USB CDC network interface with a static IP in the 192.168.7.x range.
-//
-void configureUsbStaticIP() {
-  // The correct interface key for ESP32-S3 with USB RNDIS mode enabled is "USBNetwork" or "RNDIS"
-  // Try multiple possible interface keys as they might vary based on Arduino core version
-  const char* possibleKeys[] = {"USBNetwork", "RNDIS", "CDC", "TinyUSB"};
-  esp_netif_t* usb_netif = nullptr;
-  
-  // Try each key until we find a valid interface
-  for (const char* key : possibleKeys) {
-    usb_netif = esp_netif_get_handle_from_ifkey(key);
-    if (usb_netif != nullptr) {
-      USBSerial.printf("Found USB network interface with key: %s\n", key);
-      break;
-    }
-  }
-  
-  if (usb_netif == nullptr) {
-    USBSerial.println("USB network interface not found. Attempting to create it manually...");
+// Flag to track if server is initialized
+bool serverInitialized = false;
+bool networkConfigured = false;
+
+// Setup server routes
+void setupServerRoutes() {
+    // Only set up routes once
+    static bool routesConfigured = false;
+    if (routesConfigured) return;
     
-    // Attempt to initialize RNDIS interface manually
-    // This requires proper initialization of TinyUSB with RNDIS enabled in main.cpp
-    esp_err_t err = ESP_OK;
-    
-    // Wait a bit for the USB interface to be ready
-    delay(1000);
-    
-    // Get the default USB interface - this is a fallback approach
-    usb_netif = esp_netif_next(nullptr);
-    while (usb_netif != nullptr) {
-      char ifname[16];
-      if (esp_netif_get_netif_impl_name(usb_netif, ifname) == ESP_OK) {
-        USBSerial.printf("Found network interface: %s\n", ifname);
-        // Look for USB or RNDIS in the interface name
-        if (strstr(ifname, "USB") != nullptr || strstr(ifname, "usb") != nullptr ||
-            strstr(ifname, "RNDIS") != nullptr || strstr(ifname, "rndis") != nullptr) {
-          USBSerial.printf("Using network interface: %s\n", ifname);
-          break;
+    // Serve static files from the /web folder
+    server.serveStatic("/", SPIFFS, "/web/").setDefaultFile("index.html");
+
+    // Add a simple API endpoint to check server status
+    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(200, "text/plain", "USB CDC server is running");
+    });
+
+    // Add an API endpoint to display basic network info
+    server.on("/api/network", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String networkInfo = "Device Hostname: ";
+        networkInfo += HOSTNAME;
+        networkInfo += "\nStatic IP: 192.168.7.1";
+        networkInfo += "\nAccess methods:";
+        networkInfo += "\n  - http://192.168.7.1 (direct IP)";
+        networkInfo += "\n  - http://";
+        networkInfo += HOSTNAME;
+        networkInfo += ".local (requires mDNS support)";
+        networkInfo += "\n  - http://";
+        networkInfo += HOSTNAME;
+        networkInfo += " (requires NetBIOS support)";
+        request->send(200, "text/plain", networkInfo);
+    });
+
+    // Add an admin endpoint that requires login
+    server.on("/admin", HTTP_GET, [](AsyncWebServerRequest *request) {
+        // If authentication fails, prompt the user
+        if (!request->authenticate("admin", "mypassword")) {
+            return request->requestAuthentication();
         }
-      }
-      usb_netif = esp_netif_next(usb_netif);
+        // If successful, send a welcome message
+        request->send(200, "text/plain", "Welcome, admin! You are logged in.");
+    });
+    
+    routesConfigured = true;
+}
+
+// Configure USB network with static IP
+bool configureUsbStaticIP() {
+    // Only configure once
+    if (networkConfigured) {
+        return true;
+    }
+    
+    // Find the USB network interface
+    esp_netif_t* usb_netif = nullptr;
+    
+    // Try multiple possible interface keys as they might vary based on Arduino core version
+    const char* possibleKeys[] = {"USBNetwork", "RNDIS", "CDC", "TinyUSB"};
+    
+    for (const char* key : possibleKeys) {
+        usb_netif = esp_netif_get_handle_from_ifkey(key);
+        if (usb_netif != nullptr) {
+            USBSerial.printf("Found USB network interface with key: %s\n", key);
+            break;
+        }
     }
     
     if (usb_netif == nullptr) {
-      USBSerial.println("Failed to find any USB network interface. Check USB configuration.");
-      return;
+        // If we couldn't find the interface by key, try to find it by scanning all interfaces
+        usb_netif = esp_netif_next(nullptr);
+        while (usb_netif != nullptr) {
+            char ifname[16];
+            if (esp_netif_get_netif_impl_name(usb_netif, ifname) == ESP_OK) {
+                USBSerial.printf("Found network interface: %s\n", ifname);
+                if (strstr(ifname, "USB") || strstr(ifname, "usb") || 
+                    strstr(ifname, "RNDIS") || strstr(ifname, "rndis")) {
+                    USBSerial.printf("Using network interface: %s\n", ifname);
+                    break;
+                }
+            }
+            usb_netif = esp_netif_next(usb_netif);
+        }
     }
-  }
-
-  // Clear the IP configuration structure.
-  esp_netif_ip_info_t ipInfo;
-  memset(&ipInfo, 0, sizeof(ipInfo));
-
-  // Set a fixed IP for the device - we'll use 192.168.7.1 as it's the gateway
-  // This makes it easier for users to connect to a known IP
-  const char* deviceIp = "192.168.7.1";
-  USBSerial.printf("Setting static IP: %s\n", deviceIp);
-
-  // Convert string IP addresses to ip4_addr_t values.
-  if (!ip4addr_aton(deviceIp, (ip4_addr_t *)&ipInfo.ip)) {
-    USBSerial.println("Invalid IP address format");
-    return;
-  }
-  if (!ip4addr_aton(deviceIp, (ip4_addr_t *)&ipInfo.gw)) {
-    USBSerial.println("Invalid gateway address format");
-    return;
-  }
-  if (!ip4addr_aton("255.255.255.0", (ip4_addr_t *)&ipInfo.netmask)) {
-    USBSerial.println("Invalid netmask address format");
-    return;
-  }
-
-  // Stop the DHCP client (if running) on this interface.
-  if (esp_netif_dhcpc_stop(usb_netif) != ESP_OK) {
-    USBSerial.println("Failed to stop DHCP client (this is normal if DHCP was not running)");
-  }
-
-  // Apply the static IP configuration.
-  esp_err_t err = esp_netif_set_ip_info(usb_netif, &ipInfo);
-  if (err == ESP_OK) {
-    USBSerial.printf("Static IP %s configured on USB network interface\n", deviceIp);
     
-    // Configure DHCP server for client connections (optional)
-    // This allows connected computers to get an IP address automatically
-    esp_err_t dhcps_err = esp_netif_dhcps_start(usb_netif);
-    if (dhcps_err == ESP_OK) {
-      USBSerial.println("DHCP server started");
-    } else {
-      USBSerial.printf("Failed to start DHCP server: %d\n", dhcps_err);
+    if (usb_netif == nullptr) {
+        USBSerial.println("USB network interface not found. Will retry later.");
+        return false;
     }
-  } else {
-    USBSerial.printf("Failed to set static IP: %d\n", err);
-  }
+
+    // Set up NetBIOS (if not already set up)
+    static bool netbios_initialized = false;
+    if (!netbios_initialized) {
+        try {
+            netbiosns_init();
+            netbiosns_set_name(HOSTNAME);
+            USBSerial.printf("NetBIOS name set to: %s\n", HOSTNAME);
+            netbios_initialized = true;
+        } catch (...) {
+            USBSerial.println("Error initializing NetBIOS");
+        }
+    }
+
+    // Set a fixed IP for the device
+    esp_netif_ip_info_t ipInfo;
+    memset(&ipInfo, 0, sizeof(ipInfo));
+    
+    // We'll use 192.168.7.1 as it's the gateway
+    IP4_ADDR(&ipInfo.ip, 192, 168, 7, 1);
+    IP4_ADDR(&ipInfo.gw, 192, 168, 7, 1);
+    IP4_ADDR(&ipInfo.netmask, 255, 255, 255, 0);
+    
+    USBSerial.println("Setting static IP: 192.168.7.1");
+
+    // Stop the DHCP client (if running) on this interface
+    esp_err_t dhcp_stop_result = esp_netif_dhcpc_stop(usb_netif);
+    if (dhcp_stop_result != ESP_OK && dhcp_stop_result != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        USBSerial.printf("Failed to stop DHCP client: %d\n", dhcp_stop_result);
+        // Continue anyway - this might not be fatal
+    }
+
+    // Apply the static IP configuration
+    esp_err_t set_ip_result = esp_netif_set_ip_info(usb_netif, &ipInfo);
+    if (set_ip_result == ESP_OK) {
+        USBSerial.println("Static IP configured on USB network interface");
+        
+        // Configure DHCP server for client connections (optional)
+        esp_err_t dhcps_result = esp_netif_dhcps_start(usb_netif);
+        if (dhcps_result == ESP_OK) {
+            USBSerial.println("DHCP server started");
+        } else {
+            USBSerial.printf("Failed to start DHCP server: %d (non-fatal)\n", dhcps_result);
+        }
+        
+        networkConfigured = true;
+        return true;
+    } else {
+        USBSerial.printf("Failed to set static IP: %d\n", set_ip_result);
+        return false;
+    }
 }
 
-//
-// Initializes the USB CDC HTTP server.
-// Mounts SPIFFS, sets hostname, configures the network, and sets up HTTP endpoints (including a login endpoint).
-//
+// Initialize the USB CDC HTTP server (non-blocking)
 void initUSBServer() {
-  // Mount SPIFFS. Make sure your built Svelte app is in the /web folder.
-  if (!SPIFFS.begin(true)) {
-    USBSerial.println("SPIFFS mount failed");
-    return;
-  }
-  USBSerial.println("SPIFFS mounted successfully");
-
-  // Set the hostname for mDNS and NetBIOS (optional).
-  WiFi.setHostname(HOSTNAME);
-  USBSerial.printf("Hostname set to: %s\n", HOSTNAME);
-
-  // Initialize the NetBIOS responder so Windows machines can find the device.
-  netbiosns_init();
-  netbiosns_set_name(HOSTNAME);
-  USBSerial.printf("NetBIOS name set to: %s\n", HOSTNAME);
-
-  // Configure the USB CDC network with a static IP.
-  configureUsbStaticIP();
-
-  // Serve static files from the /web folder. Ensure that an index.html file exists.
-  server.serveStatic("/", SPIFFS, "/web/").setDefaultFile("index.html");
-
-  // Add a simple API endpoint to check server status.
-  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(200, "text/plain", "USB CDC server is running");
-  });
-
-  // Add an API endpoint to display basic network info.
-  server.on("/api/network", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String networkInfo = "Device Hostname: ";
-    networkInfo += HOSTNAME;
-    networkInfo += "\nStatic IP: 192.168.7.1";
-    networkInfo += "\nAccess methods:";
-    networkInfo += "\n  - http://192.168.7.1 (direct IP)";
-    networkInfo += "\n  - http://";
-    networkInfo += HOSTNAME;
-    networkInfo += ".local (requires mDNS support)";
-    networkInfo += "\n  - http://";
-    networkInfo += HOSTNAME;
-    networkInfo += " (requires NetBIOS support)";
-    request->send(200, "text/plain", networkInfo);
-  });
-
-  // Add an admin endpoint that requires login.
-  server.on("/admin", HTTP_GET, [](AsyncWebServerRequest *request) {
-    // If authentication fails, prompt the user.
-    if (!request->authenticate("admin", "mypassword")) {
-      return request->requestAuthentication();
+    // Only initialize once
+    if (serverInitialized) {
+        return;
     }
-    // If successful, send a welcome message.
-    request->send(200, "text/plain", "Welcome, admin! You are logged in.");
-  });
+    
+    // Set up the server routes
+    setupServerRoutes();
+    
+    // Try to configure the USB network
+    if (configureUsbStaticIP()) {
+        USBSerial.println("USB network configured successfully");
+    } else {
+        USBSerial.println("Will try to configure USB network later in updateUSBServer()");
+    }
+    
+    // Start the HTTP server
+    try {
+        server.begin();
+        USBSerial.println("USB HTTP server started");
+        USBSerial.printf("Connect to this device via USB at http://%s.local or http://192.168.7.1\n", HOSTNAME);
+        serverInitialized = true;
+    } catch (...) {
+        USBSerial.println("Failed to start HTTP server - will retry later");
+    }
+}
 
-  // Start the HTTP server.
-  server.begin();
-  USBSerial.println("USB HTTP server started");
-  USBSerial.printf("Connect to this device via USB at http://%s.local or http://192.168.7.1\n", HOSTNAME);
+// Update the USB server (call from loop)
+void updateUSBServer() {
+    static unsigned long lastRetryTime = 0;
+    const unsigned long RETRY_INTERVAL = 10000; // 10 seconds
+    
+    // If everything is set up, nothing to do
+    if (serverInitialized && networkConfigured) {
+        return;
+    }
+    
+    // Only retry periodically
+    unsigned long now = millis();
+    if (now - lastRetryTime < RETRY_INTERVAL) {
+        return;
+    }
+    
+    lastRetryTime = now;
+    USBSerial.println("Trying to set up USB server...");
+    
+    // Try to set up the network if not yet configured
+    if (!networkConfigured) {
+        if (configureUsbStaticIP()) {
+            USBSerial.println("USB network configured successfully on retry");
+        } else {
+            USBSerial.println("USB network configuration failed - will retry later");
+        }
+    }
+    
+    // Try to start the server if not yet initialized
+    if (!serverInitialized) {
+        try {
+            setupServerRoutes();
+            server.begin();
+            USBSerial.println("USB HTTP server started on retry");
+            serverInitialized = true;
+        } catch (...) {
+            USBSerial.println("Failed to start HTTP server - will retry later");
+        }
+    }
 }
