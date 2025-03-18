@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <USBCDC.h>
-#include "USBServer.h"
 #include "esp_netif.h"
 #include "lwip/ip_addr.h"
 #include "lwip/inet.h"
@@ -31,7 +30,6 @@ USBCDC USBSerial;
 
 // Flag to indicate if USB server should be initialized
 // IMPORTANT: Set this to false to disable USB server completely
-bool enableUsbServer = true;  // CHANGE TO TRUE WHEN YOU'RE READY TO TEST USB SERVER
 
 #define TAG "HID+CDC Esp32-s3 Macropad"
 
@@ -298,52 +296,6 @@ void usbServerTask(void *pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(15000)); // Wait 15 seconds before first attempt
     
     USBSerial.println("Starting USB Server initialization task");
-    
-    while (true) {
-        if (enableUsbServer) {
-            USBSerial.println("Attempting to initialize USB Server...");
-            
-            // Try to initialize, but don't let it block indefinitely
-            try {
-                initUSBServer();
-                USBSerial.println("USB Server initialization attempted");
-            } catch (...) {
-                USBSerial.println("Exception during USB Server initialization");
-            }
-            
-            // Update USB server periodically
-            try {
-                updateUSBServer();
-            } catch (...) {
-                USBSerial.println("Exception during USB Server update");
-            }
-        } else {
-            USBSerial.println("USB Server disabled by configuration");
-        }
-        
-        // Wait before next retry
-        vTaskDelay(pdMS_TO_TICKS(retryDelay));
-    }
-}
-
-// Add this function to display network status
-void displayNetworkStatus() {
-    static unsigned long lastNetworkStatusTime = 0;
-    const unsigned long NETWORK_STATUS_INTERVAL = 30000; // 30 seconds
-    
-    if (millis() - lastNetworkStatusTime >= NETWORK_STATUS_INTERVAL) {
-        lastNetworkStatusTime = millis();
-        
-        USBSerial.println("\n=== Device Status ===");
-        if (enableUsbServer) {
-            USBSerial.printf("USB Server: Enabled\n");
-            USBSerial.printf("Device Hostname: %s\n", HOSTNAME);
-            USBSerial.println("===================\n");
-        } else {
-            USBSerial.println("USB Server: Disabled");
-            USBSerial.println("===================\n");
-        }
-    }
 }
 
 void setup() {
@@ -417,22 +369,11 @@ void setup() {
     // Create tasks for keyboard and encoder handling
     xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
-    
-    // Create a separate task for USB Server with lower priority
-    // This ensures it won't interfere with core functionality
-    if (enableUsbServer) {
-        USBSerial.println("USB Server enabled - creating task");
-        xTaskCreate(usbServerTask, "usb_server_task", 8192, NULL, 1, NULL);
-    } else {
-        USBSerial.println("USB Server disabled - skipping initialization");
-    }
 
     USBSerial.println("Setup complete - entering main loop");
 }
 
 void loop() {
-    // Display status periodically
-    displayNetworkStatus();
 
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
