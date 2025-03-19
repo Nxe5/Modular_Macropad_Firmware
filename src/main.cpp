@@ -23,6 +23,8 @@
 #include <USBHIDMouse.h>
 #include <USBCDC.h>
 
+#include "WiFiManager.h"
+
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
 USBHIDMouse Mouse;  // Optional if you need mouse controls
@@ -318,6 +320,24 @@ void setup() {
         USBSerial.println("Failed to mount SPIFFS");
     } else {
         USBSerial.println("SPIFFS mounted successfully");
+        
+        // Create config directory if it doesn't exist
+        if (!SPIFFS.exists("/config")) {
+            if (SPIFFS.mkdir("/config")) {
+                USBSerial.println("Created /config directory");
+            } else {
+                USBSerial.println("Failed to create /config directory");
+            }
+        }
+        
+        // Create web directory if it doesn't exist
+        if (!SPIFFS.exists("/web")) {
+            if (SPIFFS.mkdir("/web")) {
+                USBSerial.println("Created /web directory");
+            } else {
+                USBSerial.println("Failed to create /web directory");
+            }
+        }
     }
     
     // Initialize module configuration
@@ -341,6 +361,10 @@ void setup() {
     
     USBSerial.println("Initialize Encoders");
     initializeEncoderHandler();
+    
+    // Initialize WiFi Manager
+    USBSerial.println("Initializing WiFi Manager...");
+    WiFiManager::begin();
 
     // Debug actions configuration
     debugActionsConfig();
@@ -377,6 +401,11 @@ void setup() {
 }
 
 void loop() {
+    // Update WiFi Manager
+    WiFiManager::update();
+
+    // Update LEDs
+    updateLEDs();
 
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
