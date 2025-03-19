@@ -38,6 +38,8 @@ public:
     // Status accessors
     static bool isConnected();
     static IPAddress getLocalIP();
+    static bool isAPMode() { return _apMode; }
+    static String getSSID() { return _ssid; }
     
 private:
     // WiFi settings

@@ -15,6 +15,7 @@
 #include "LEDHandler.h"
 #include "EncoderHandler.h"
 #include "HIDHandler.h"
+#include "DisplayHandler.h"
 
 #include <USB.h>
 #include <USBHID.h>
@@ -24,6 +25,9 @@
 #include <USBCDC.h>
 
 #include "WiFiManager.h"
+
+// Forward declarations for Display functions
+extern void updateDisplay();
 
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
@@ -340,6 +344,10 @@ void setup() {
         }
     }
     
+    // Initialize display
+    USBSerial.println("Initializing display...");
+    initializeDisplay();
+    
     // Initialize module configuration
     USBSerial.println("Initializing module configuration...");
     initializeModuleInfo();
@@ -406,6 +414,9 @@ void loop() {
 
     // Update LEDs
     updateLEDs();
+    
+    // Update display
+    updateDisplay();
 
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;

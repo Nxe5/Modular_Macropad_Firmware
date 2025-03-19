@@ -5,13 +5,14 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
+#include "EncoderHandler.h" // Include this for EncoderType and EncoderConfig
 
 // Pin definitions for the display
 #define TFT_CS    37   // Chip select pin
-#define TFT_DC    39   // Data/command pin
+#define TFT_DC    39   // Data/command pin, using miso pin
 #define TFT_SCLK  40   // Serial clock pin
-#define TFT_MOSI  38   // Master out, slave in pin
-#define TFT_RST   15   // Reset pin
+#define TFT_MOSI  38   // Master out, slave in pin also known as DIN
+#define TFT_RST   41   // Reset pin
 
 
 // Function declarations
@@ -22,28 +23,13 @@ void updateDisplay();
 void toggleMode();
 void handleEncoder(int encoderPosition);
 
-// Encoder Types
-enum EncoderType {
-    ENCODER_TYPE_MECHANICAL,  // Standard rotary encoder
-    ENCODER_TYPE_AS5600       // Magnetic encoder
-};
+// Function to show a temporary message on the display
+void showTemporaryMessage(const char* message, uint32_t duration = 3000);
+void checkTemporaryMessage(); // Check if temporary message should be cleared
 
-// Configuration for each encoder
-struct EncoderConfig {    
-    // Pins for different encoder types
-    uint8_t pinA = 0;        // Mechanical encoder or I2C SDA for AS5600
-    uint8_t pinB = 0;        // Mechanical encoder or I2C SCL for AS5600
-    
-    // AS5600 specific configuration
-    uint16_t zeroPosition = 0;  // Calibration zero point
-    uint16_t steps = 4096;      // Total steps for AS5600 (12-bit)
-    int8_t direction = 1;       // 1 or -1 to invert rotation
-    
-    // Detailed tracking
-    long absolutePosition = 0;      // Current absolute position
-    long lastReportedPosition = 0;  // Last reported position
-    uint16_t lastRawPosition = 0;   // Last raw AS5600 position
-    long lastMechanicalPosition = 0; // Last mechanical encoder position
-};
+// Function to display WiFi information
+void displayWiFiInfo(bool isAPMode, const String& ipAddress, const String& ssid);
+
+// NOTE: EncoderType and EncoderConfig are now included from EncoderHandler.h
 
 #endif // DISPLAY_HANDLER_H
