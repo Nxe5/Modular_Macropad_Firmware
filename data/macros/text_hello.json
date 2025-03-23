@@ -1,0 +1,23 @@
+{
+  "id": "text_hello",
+  "name": "Type Hello World",
+  "description": "Types 'Hello, World!' with delays between characters",
+  "commands": [
+    {
+      "type": "type_text",
+      "text": "Hello, World!"
+    },
+    {
+      "type": "delay",
+      "ms": 500
+    },
+    {
+      "type": "key_press",
+      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "type_text",
+      "text": "Typed with macros!"
+    }
+  ]
+} 

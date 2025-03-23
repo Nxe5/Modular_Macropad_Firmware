@@ -2,6 +2,7 @@
 
 #include "KeyHandler.h"
 #include "HIDHandler.h"
+#include "MacroHandler.h"
 #include "ConfigManager.h"
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
@@ -9,6 +10,7 @@
 #include <algorithm> // For std::sort
 
 extern USBCDC USBSerial;
+extern MacroHandler* macroHandler;
 
 KeyHandler* keyHandler = nullptr;
 
@@ -349,8 +351,13 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             
         case ACTION_MACRO:
             if (action == KEY_PRESS && !config.macroId.isEmpty()) {
-                if (hidHandler) {
-                    hidHandler->executeMacro(config.macroId.c_str());
+                USBSerial.printf("Executing macro: %s\n", config.macroId.c_str());
+                if (macroHandler) {
+                    // Use MacroHandler instead of HIDHandler for macro execution
+                    bool success = macroHandler->executeMacro(config.macroId);
+                    USBSerial.printf("Macro execution %s\n", success ? "started" : "failed");
+                } else {
+                    USBSerial.println("MacroHandler not initialized");
                 }
             }
             break;

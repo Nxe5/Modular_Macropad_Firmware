@@ -1,0 +1,24 @@
+{
+  "macros": [
+    {
+      "id": "copy",
+      "name": "Copy Command"
+    },
+    {
+      "id": "paste",
+      "name": "Paste Command"
+    },
+    {
+      "id": "select_all",
+      "name": "Select All"
+    },
+    {
+      "id": "text_hello",
+      "name": "Type Hello World"
+    },
+    {
+      "id": "complex_sequence",
+      "name": "Complex Command Sequence"
+    }
+  ]
+} 

@@ -16,6 +16,7 @@
 #include "EncoderHandler.h"
 #include "HIDHandler.h"
 #include "DisplayHandler.h"
+#include "MacroHandler.h"
 
 #include <USB.h>
 #include <USBHID.h>
@@ -342,6 +343,15 @@ void setup() {
                 USBSerial.println("Failed to create /web directory");
             }
         }
+        
+        // Create macros directory if it doesn't exist
+        if (!SPIFFS.exists("/macros")) {
+            if (SPIFFS.mkdir("/macros")) {
+                USBSerial.println("Created /macros directory");
+            } else {
+                USBSerial.println("Failed to create /macros directory");
+            }
+        }
     }
     
     // Initialize display
@@ -360,6 +370,10 @@ void setup() {
     // Initialize HID handler before other components
     USBSerial.println("Initializing HID Handler...");
     initializeHIDHandler();
+    
+    // Initialize MacroHandler after HID handler but before other components
+    USBSerial.println("Initializing Macro Handler...");
+    initializeMacroHandler();
     
     USBSerial.println("Initializing KeyHandler...");
     initializeKeyHandler();
@@ -417,6 +431,9 @@ void loop() {
     
     // Update display
     updateDisplay();
+    
+    // Update macro execution
+    updateMacroHandler();
 
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
