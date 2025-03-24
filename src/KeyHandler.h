@@ -53,6 +53,13 @@ public:
     void printKeyboardState();
     void diagnostics();
     
+    // Layer management
+    bool switchToLayer(const String& layerName);
+    String getCurrentLayer() const { return currentLayer; }
+    bool loadLayerConfiguration(const String& layerName, const std::map<String, ActionConfig>& actions);
+    bool isLayerAvailable(const String& layerName) const;
+    std::vector<String> getAvailableLayers() const;
+    
 private:
     void cleanup();
     void executeAction(uint8_t keyIndex, KeyAction action);
@@ -63,6 +70,12 @@ private:
     uint8_t* colPins;
     Keypad* keypad;
     KeyConfig* actionMap;
+    
+    // Layer management
+    String currentLayer = "default";
+    std::map<String, std::map<String, KeyConfig>> layerConfigs; // Layer -> ComponentID -> Config
+    void saveCurrentLayer();
+    bool loadCurrentLayer();
     
     // Direct position mapping
     struct ComponentPosition {

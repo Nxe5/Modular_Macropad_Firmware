@@ -2,8 +2,11 @@
 #include "LEDHandler.h"
 #include "KeyHandler.h"
 #include "DisplayHandler.h"
+#include "MacroHandler.h"
 
 extern USBCDC USBSerial;
+extern KeyHandler* keyHandler;
+extern MacroHandler* macroHandler;
 
 // Static member initialization
 String WiFiManager::_ssid = "MacroPad";
@@ -199,6 +202,225 @@ void WiFiManager::setupWebServer() {
         ESP.restart();
     });
     
+    // Macro API Endpoints
+    
+    // Get list of all macros
+    _server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
+        DynamicJsonDocument doc(4096);
+        JsonArray macroArray = doc.createNestedArray("macros");
+        
+        if (macroHandler) {
+            std::vector<String> macroIds = macroHandler->getAvailableMacros();
+            
+            for (const String& macroId : macroIds) {
+                Macro macro;
+                if (macroHandler->getMacro(macroId, macro)) {
+                    JsonObject macroObj = macroArray.createNestedObject();
+                    macroObj["id"] = macro.id;
+                    macroObj["name"] = macro.name;
+                    macroObj["description"] = macro.description;
+                    // Don't include commands for the listing
+                }
+            }
+        }
+        
+        String output;
+        serializeJson(doc, output);
+        request->send(200, "application/json", output);
+    });
+    
+    // Get a specific macro by ID
+    _server.on("/api/macros/^([a-zA-Z0-9_-]+)$", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String macroId = request->pathArg(0);
+        
+        if (macroHandler) {
+            Macro macro;
+            if (macroHandler->getMacro(macroId, macro)) {
+                DynamicJsonDocument doc(8192);
+                JsonObject macroObj = doc.to<JsonObject>();
+                
+                macroObj["id"] = macro.id;
+                macroObj["name"] = macro.name;
+                macroObj["description"] = macro.description;
+                
+                JsonArray cmdsArray = macroObj.createNestedArray("commands");
+                for (const MacroCommand& cmd : macro.commands) {
+                    JsonObject cmdObj = cmdsArray.createNestedObject();
+                    
+                    // Format command based on type
+                    JsonArray reportArray;
+                    
+                    switch (cmd.type) {
+                        case MACRO_CMD_KEY_PRESS:
+                            cmdObj["type"] = "key_press";
+                            reportArray = cmdObj.createNestedArray("report");
+                            for (int i = 0; i < 8; i++) {
+                                reportArray.add(cmd.data.keyPress.report[i]);
+                            }
+                            break;
+                        
+                        case MACRO_CMD_KEY_DOWN:
+                            cmdObj["type"] = "key_down";
+                            reportArray = cmdObj.createNestedArray("report");
+                            for (int i = 0; i < 8; i++) {
+                                reportArray.add(cmd.data.keyPress.report[i]);
+                            }
+                            break;
+                            
+                        case MACRO_CMD_KEY_UP:
+                            cmdObj["type"] = "key_up";
+                            reportArray = cmdObj.createNestedArray("report");
+                            for (int i = 0; i < 8; i++) {
+                                reportArray.add(cmd.data.keyPress.report[i]);
+                            }
+                            break;
+                            
+                        case MACRO_CMD_TYPE_TEXT:
+                            cmdObj["type"] = "type_text";
+                            cmdObj["text"] = cmd.data.typeText.text;
+                            break;
+                            
+                        case MACRO_CMD_DELAY:
+                            cmdObj["type"] = "delay";
+                            cmdObj["milliseconds"] = cmd.data.delay.milliseconds;
+                            break;
+                            
+                        case MACRO_CMD_CONSUMER_PRESS:
+                            cmdObj["type"] = "consumer_press";
+                            reportArray = cmdObj.createNestedArray("report");
+                            for (int i = 0; i < 4; i++) {
+                                reportArray.add(cmd.data.consumerPress.report[i]);
+                            }
+                            break;
+                            
+                        case MACRO_CMD_EXECUTE_MACRO:
+                            cmdObj["type"] = "execute_macro";
+                            cmdObj["macroId"] = cmd.data.executeMacro.macroId;
+                            break;
+                    }
+                }
+                
+                String output;
+                serializeJson(doc, output);
+                request->send(200, "application/json", output);
+                return;
+            }
+        }
+        
+        request->send(404, "application/json", "{\"error\":\"Macro not found\"}");
+    });
+    
+    // Create or update a macro
+    _server.on("/api/macros", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            DynamicJsonDocument doc(8192);
+            DeserializationError error = deserializeJson(doc, (const char*)data, len);
+            
+            if (error) {
+                request->send(400, "application/json", 
+                             "{\"error\":\"JSON parsing failed: " + String(error.c_str()) + "\"}");
+                return;
+            }
+            
+            if (!macroHandler) {
+                request->send(500, "application/json", "{\"error\":\"MacroHandler not initialized\"}");
+                return;
+            }
+            
+            // Parse the macro from JSON
+            Macro macro;
+            if (macroHandler->parseMacroFromJson(doc.as<JsonObject>(), macro)) {
+                if (macroHandler->saveMacro(macro)) {
+                    request->send(200, "application/json", "{\"status\":\"ok\",\"id\":\"" + macro.id + "\"}");
+                } else {
+                    request->send(500, "application/json", "{\"error\":\"Failed to save macro\"}");
+                }
+            } else {
+                request->send(400, "application/json", "{\"error\":\"Invalid macro format\"}");
+            }
+        }
+    );
+    
+    // Delete a macro
+    _server.on("/api/macros/^([a-zA-Z0-9_-]+)$", HTTP_DELETE, [](AsyncWebServerRequest *request) {
+        String macroId = request->pathArg(0);
+        
+        if (macroHandler) {
+            if (macroHandler->deleteMacro(macroId)) {
+                request->send(200, "application/json", "{\"status\":\"ok\"}");
+                return;
+            }
+        }
+        
+        request->send(404, "application/json", "{\"error\":\"Macro not found\"}");
+    });
+    
+    // Layer API Endpoints
+    
+    // Get current layer and available layers
+    _server.on("/api/layers", HTTP_GET, [](AsyncWebServerRequest *request) {
+        DynamicJsonDocument doc(4096);
+        
+        if (keyHandler) {
+            doc["current_layer"] = keyHandler->getCurrentLayer();
+            
+            JsonArray layersArray = doc.createNestedArray("available_layers");
+            std::vector<String> layers = keyHandler->getAvailableLayers();
+            for (const String& layer : layers) {
+                layersArray.add(layer);
+            }
+        } else {
+            doc["current_layer"] = "default";
+            JsonArray layersArray = doc.createNestedArray("available_layers");
+            layersArray.add("default");
+        }
+        
+        String output;
+        serializeJson(doc, output);
+        request->send(200, "application/json", output);
+    });
+    
+    // Switch to a different layer
+    _server.on("/api/layers/switch", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, (const char*)data, len);
+            
+            if (error) {
+                request->send(400, "application/json", 
+                             "{\"error\":\"JSON parsing failed: " + String(error.c_str()) + "\"}");
+                return;
+            }
+            
+            if (!doc.containsKey("layer")) {
+                request->send(400, "application/json", "{\"error\":\"Missing layer parameter\"}");
+                return;
+            }
+            
+            String targetLayer = doc["layer"].as<String>();
+            
+            if (keyHandler) {
+                if (keyHandler->switchToLayer(targetLayer)) {
+                    request->send(200, "application/json", 
+                                 "{\"status\":\"ok\",\"layer\":\"" + targetLayer + "\"}");
+                } else {
+                    request->send(404, "application/json", 
+                                 "{\"error\":\"Layer not found: " + targetLayer + "\"}");
+                }
+            } else {
+                request->send(500, "application/json", "{\"error\":\"KeyHandler not initialized\"}");
+            }
+        }
+    );
+    
     // 404 handler
     _server.onNotFound([](AsyncWebServerRequest *request) {
         request->send(404, "text/plain", "Not found");
@@ -318,13 +540,25 @@ void WiFiManager::update() {
 void WiFiManager::broadcastStatus() {
     // Only broadcast if we have clients
     if (_ws.count() > 0) {
-        DynamicJsonDocument doc(1024);
+        DynamicJsonDocument doc(2048);
         doc["type"] = "status";
         doc["data"]["wifi"]["connected"] = isConnected();
         doc["data"]["wifi"]["ip"] = getLocalIP().toString();
         doc["data"]["time"] = millis();
         
-        // Add more status info as needed
+        // Add layer status
+        if (keyHandler) {
+            doc["data"]["layer"] = keyHandler->getCurrentLayer();
+        } else {
+            doc["data"]["layer"] = "default";
+        }
+        
+        // Add macro execution status
+        if (macroHandler) {
+            doc["data"]["macro_running"] = macroHandler->isExecuting();
+        } else {
+            doc["data"]["macro_running"] = false;
+        }
         
         String message;
         serializeJson(doc, message);

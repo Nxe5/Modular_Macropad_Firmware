@@ -138,6 +138,9 @@ void KeyHandler::cleanup() {
 void KeyHandler::begin() {
     try {
         USBSerial.println("KeyHandler initialization complete - using configuration from configurePinModes()");
+        
+        // Load the saved layer if available
+        loadCurrentLayer();
     } 
     catch (...) {
         USBSerial.println("Error in KeyHandler::begin()");
@@ -151,71 +154,37 @@ uint8_t KeyHandler::getTotalKeys() {
 void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& actions) {
     uint8_t totalKeys = componentPositions.size();
     
-    // Clear all configurations
-    for (uint8_t i = 0; i < totalKeys; i++) {
-        actionMap[i].type = ACTION_NONE;
-        memset(actionMap[i].hidReport, 0, sizeof(actionMap[i].hidReport));
-        memset(actionMap[i].consumerReport, 0, sizeof(actionMap[i].consumerReport));
-        actionMap[i].macroId = "";
-        actionMap[i].targetLayer = "";
+    USBSerial.printf("Loading key configuration for %d keys to the default layer\n", totalKeys);
+    
+    // Load configuration to default layer
+    loadLayerConfiguration("default", actions);
+    
+    // If we don't have a current layer yet, set it to default
+    if (!isLayerAvailable(currentLayer)) {
+        currentLayer = "default";
     }
     
-    USBSerial.printf("Loading key configuration for %d keys\n", totalKeys);
-    
-    // Load configurations for each component
-    for (uint8_t i = 0; i < totalKeys; i++) {
-        String id = componentPositions[i].id;
-        
-        // Check if we have actions for this component
-        if (actions.find(id) != actions.end()) {
-            const ActionConfig& ac = actions.at(id);
-            
-            USBSerial.printf("Configuring %s with action type: %s\n", 
-                          id.c_str(), ac.type.c_str());
-            
-            if (ac.type == "hid") {
-                actionMap[i].type = ACTION_HID;
-                
-                if (!ac.hidReport.empty()) {
-                    if (HIDHandler::hexReportToBinary(ac.hidReport, actionMap[i].hidReport, 8)) {
-                        USBSerial.printf("HID report for %s: ", id.c_str());
-                        for (int j = 0; j < 8; j++) {
-                            USBSerial.printf("%02X ", actionMap[i].hidReport[j]);
-                        }
-                        USBSerial.println();
-                    } else {
-                        USBSerial.printf("Failed to convert HID report for %s\n", id.c_str());
-                    }
-                }
-            } 
-            else if (ac.type == "multimedia") {
-                actionMap[i].type = ACTION_MULTIMEDIA;
-                
-                if (!ac.consumerReport.empty()) {
-                    if (HIDHandler::hexReportToBinary(ac.consumerReport, actionMap[i].consumerReport, 4)) {
-                        USBSerial.printf("Consumer report for %s: ", id.c_str());
-                        for (int j = 0; j < 4; j++) {
-                            USBSerial.printf("%02X ", actionMap[i].consumerReport[j]);
-                        }
-                        USBSerial.println();
-                    } else {
-                        USBSerial.printf("Failed to convert Consumer report for %s\n", id.c_str());
-                    }
-                }
+    // Apply current layer configuration to actionMap
+    if (layerConfigs.find(currentLayer) != layerConfigs.end()) {
+        std::map<String, KeyConfig>& configs = layerConfigs[currentLayer];
+        for (size_t i = 0; i < componentPositions.size(); i++) {
+            String componentId = componentPositions[i].id;
+            if (configs.find(componentId) != configs.end()) {
+                actionMap[i] = configs[componentId];
+            } else {
+                // Clear configuration if not found in layer
+                actionMap[i].type = ACTION_NONE;
+                memset(actionMap[i].hidReport, 0, sizeof(actionMap[i].hidReport));
+                memset(actionMap[i].consumerReport, 0, sizeof(actionMap[i].consumerReport));
+                actionMap[i].macroId = "";
+                actionMap[i].targetLayer = "";
             }
-            else if (ac.type == "macro") {
-                actionMap[i].type = ACTION_MACRO;
-                actionMap[i].macroId = ac.macroId;
-            }
-            else if (ac.type == "layer") {
-                actionMap[i].type = ACTION_LAYER;
-                actionMap[i].targetLayer = ac.targetLayer;
-            }
-        } else {
-            USBSerial.printf("No action configured for %s\n", id.c_str());
         }
+    } else {
+        USBSerial.printf("No configuration found for layer '%s', using default\n", currentLayer.c_str());
     }
     
+    USBSerial.printf("Using layer: %s\n", currentLayer.c_str());
     USBSerial.println("Key configuration loaded successfully");
 }
 
@@ -364,7 +333,10 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             
         case ACTION_LAYER:
             if (action == KEY_PRESS && !config.targetLayer.isEmpty()) {
-                // Layer switching code goes here
+                USBSerial.printf("Switching to layer: %s\n", config.targetLayer.c_str());
+                bool success = switchToLayer(config.targetLayer);
+                
+                USBSerial.printf("Layer switch %s\n", success ? "succeeded" : "failed");
             }
             break;
             
@@ -396,5 +368,162 @@ void KeyHandler::diagnostics() {
     if (now - lastDiagTime >= diagInterval) {
         lastDiagTime = now;
         printKeyboardState();
+    }
+}
+
+bool KeyHandler::switchToLayer(const String& layerName) {
+    // Check if the layer is available
+    if (!isLayerAvailable(layerName)) {
+        USBSerial.printf("Layer '%s' is not available\n", layerName.c_str());
+        return false;
+    }
+    
+    USBSerial.printf("Switching from layer '%s' to '%s'\n", currentLayer.c_str(), layerName.c_str());
+    
+    // Save the current layer configs if needed
+    if (layerConfigs.find(currentLayer) == layerConfigs.end()) {
+        // Create a mapping from component ID to current config
+        std::map<String, KeyConfig> currentConfigs;
+        for (size_t i = 0; i < componentPositions.size(); i++) {
+            currentConfigs[componentPositions[i].id] = actionMap[i];
+        }
+        layerConfigs[currentLayer] = currentConfigs;
+    }
+    
+    // Update the current layer
+    currentLayer = layerName;
+    
+    // Apply the new layer configuration
+    std::map<String, KeyConfig>& configs = layerConfigs[layerName];
+    for (size_t i = 0; i < componentPositions.size(); i++) {
+        String componentId = componentPositions[i].id;
+        if (configs.find(componentId) != configs.end()) {
+            actionMap[i] = configs[componentId];
+        }
+    }
+    
+    // Save the layer change to persist across reboots
+    saveCurrentLayer();
+    
+    return true;
+}
+
+bool KeyHandler::loadLayerConfiguration(const String& layerName, const std::map<String, ActionConfig>& actions) {
+    // Create a new layer configuration
+    std::map<String, KeyConfig> configs;
+    
+    // Process each action and store in the layer
+    for (const auto& actionPair : actions) {
+        const String& componentId = actionPair.first;
+        const ActionConfig& actionConfig = actionPair.second;
+        
+        KeyConfig keyConfig;
+        
+        // Set action type based on the action config
+        if (actionConfig.type == "hid") {
+            keyConfig.type = ACTION_HID;
+            
+            // Parse HID report
+            for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)8); i++) {
+                keyConfig.hidReport[i] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+            }
+        } else if (actionConfig.type == "multimedia") {
+            keyConfig.type = ACTION_MULTIMEDIA;
+            
+            // Parse consumer report
+            for (size_t i = 0; i < std::min(actionConfig.consumerReport.size(), (size_t)4); i++) {
+                keyConfig.consumerReport[i] = strtoul(actionConfig.consumerReport[i].c_str(), nullptr, 16);
+            }
+        } else if (actionConfig.type == "macro") {
+            keyConfig.type = ACTION_MACRO;
+            keyConfig.macroId = actionConfig.macroId;
+        } else if (actionConfig.type == "layer") {
+            keyConfig.type = ACTION_LAYER;
+            keyConfig.targetLayer = actionConfig.targetLayer;
+        } else {
+            keyConfig.type = ACTION_NONE;
+        }
+        
+        // Store the key configuration
+        configs[componentId] = keyConfig;
+    }
+    
+    // Store the layer configuration
+    layerConfigs[layerName] = configs;
+    
+    // If this is the current layer, apply it now
+    if (layerName == currentLayer) {
+        for (size_t i = 0; i < componentPositions.size(); i++) {
+            String componentId = componentPositions[i].id;
+            if (configs.find(componentId) != configs.end()) {
+                actionMap[i] = configs[componentId];
+            }
+        }
+    }
+    
+    return true;
+}
+
+bool KeyHandler::isLayerAvailable(const String& layerName) const {
+    return layerConfigs.find(layerName) != layerConfigs.end();
+}
+
+std::vector<String> KeyHandler::getAvailableLayers() const {
+    std::vector<String> layers;
+    for (const auto& layer : layerConfigs) {
+        layers.push_back(layer.first);
+    }
+    return layers;
+}
+
+void KeyHandler::saveCurrentLayer() {
+    DynamicJsonDocument doc(1024);
+    doc["current_layer"] = currentLayer;
+    
+    File file = SPIFFS.open("/config/current_layer.json", "w");
+    if (file) {
+        serializeJson(doc, file);
+        file.close();
+        USBSerial.printf("Current layer '%s' saved to SPIFFS\n", currentLayer.c_str());
+    } else {
+        USBSerial.println("Failed to save current layer to SPIFFS");
+    }
+}
+
+bool KeyHandler::loadCurrentLayer() {
+    if (!SPIFFS.exists("/config/current_layer.json")) {
+        USBSerial.println("No saved layer found, using default");
+        return false;
+    }
+    
+    File file = SPIFFS.open("/config/current_layer.json", "r");
+    if (!file) {
+        USBSerial.println("Failed to open layer file");
+        return false;
+    }
+    
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        USBSerial.printf("Failed to parse layer file: %s\n", error.c_str());
+        return false;
+    }
+    
+    String savedLayer = doc["current_layer"].as<String>();
+    if (savedLayer.isEmpty()) {
+        USBSerial.println("No layer specified in file");
+        return false;
+    }
+    
+    // Only switch if the layer is available
+    if (isLayerAvailable(savedLayer)) {
+        currentLayer = savedLayer;
+        USBSerial.printf("Loaded saved layer: %s\n", currentLayer.c_str());
+        return true;
+    } else {
+        USBSerial.printf("Saved layer '%s' not available\n", savedLayer.c_str());
+        return false;
     }
 }

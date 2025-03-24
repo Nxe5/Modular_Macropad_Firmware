@@ -89,6 +89,9 @@ public:
     // Get a specific macro by ID
     bool getMacro(const String& macroId, Macro& outMacro);
 
+    // Check if any macro is currently executing
+    bool isExecuting() const { return isExecutingMacro; }
+
     // Update method called from the main loop
     void update();
 

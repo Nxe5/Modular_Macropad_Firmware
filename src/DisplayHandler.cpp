@@ -2,8 +2,12 @@
 #include <USBCDC.h>
 #include "WiFiManager.h"
 #include <WiFi.h>
+#include "KeyHandler.h"
+#include "MacroHandler.h"
 
 extern USBCDC USBSerial;
+extern KeyHandler* keyHandler;
+extern MacroHandler* macroHandler;
 
 static Adafruit_ST7789* display = nullptr;
 static uint32_t temporaryMessageTimeout = 0;
@@ -65,12 +69,6 @@ void printText(const char* text, int x, int y, uint16_t color, uint8_t size) {
 }
 
 void updateDisplay() {
-    // For now, just return to leave the test pattern visible
-    USBSerial.println("updateDisplay called but skipped to preserve test pattern");
-    return;
-    
-    // Original code temporarily disabled
-    /*
     // Check if we need to clear a temporary message
     if (temporaryMessageActive) {
         checkTemporaryMessage();
@@ -90,11 +88,34 @@ void updateDisplay() {
     
     display->drawLine(10, 35, 230, 35, ST77XX_BLUE);
     
-    // Draw status
-    display->setCursor(10, 40);
+    // Show active layer
+    display->setCursor(10, 45);
     display->setTextSize(1);
+    display->setTextColor(ST77XX_CYAN);
+    // Get current layer from KeyHandler
+    String activeLayer = "Default";
+    if (keyHandler) {
+        activeLayer = keyHandler->getCurrentLayer();
+    }
+    display->print("Active Layer: " + activeLayer);
+    
+    // Show last executed macro if available
+    display->setCursor(10, 60);
     display->setTextColor(ST77XX_GREEN);
-    display->println("Ready");
+    // Check if a macro is currently executing
+    if (macroHandler && macroHandler->isExecuting()) {
+        display->print("Macro: Running");
+    } else {
+        display->print("Macro: Ready");
+    }
+    
+    // Show operation mode
+    display->setCursor(10, 75);
+    display->setTextColor(ST77XX_YELLOW);
+    display->println("Mode: Normal");
+    
+    // Draw divider
+    display->drawLine(10, 95, 230, 95, ST77XX_BLUE);
     
     // Show WiFi information
     bool isAPMode = WiFiManager::isAPMode();
@@ -103,7 +124,6 @@ void updateDisplay() {
     
     // Display the WiFi info
     displayWiFiInfo(isAPMode, ipAddress, ssid);
-    */
 }
 
 void toggleMode() {
