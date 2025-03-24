@@ -441,17 +441,17 @@ void loop() {
 
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 8000) {
+    if (millis() - lastPrint > 10000) {
         lastPrint = millis();
         USBSerial.println("Heartbeat...");
         
-        // Optionally print diagnostics every 8 seconds
-        if (keyHandler) {
-            keyHandler->diagnostics();
-        }
-        if (encoderHandler) {
-            encoderHandler->diagnostics();
-        }
+        // // Optionally print diagnostics every 8 seconds
+        // if (keyHandler) {
+        //     keyHandler->diagnostics();
+        // }
+        // if (encoderHandler) {
+        //     encoderHandler->diagnostics();
+        // }
     }
     
     // No need to call updateKeyHandler here - the task is handling it

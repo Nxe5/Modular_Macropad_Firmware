@@ -14,6 +14,7 @@
 
 // Forward declarations
 String serializedJson(const String& jsonStr);
+String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer = false);
 
 extern USBCDC USBSerial;
 extern KeyHandler* keyHandler;
@@ -569,11 +570,54 @@ void WiFiManager::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
                             USBSerial.printf("Component %d: type=%d, macroId=%s\n", 
                                          i, (int)config.type, config.macroId.c_str());
                             
-                            // Add to array only if it has a macro assignment
-                            if (config.type == ACTION_MACRO && !config.macroId.isEmpty()) {
-                                JsonObject bindingObj = bindingsArray.createNestedObject();
-                                bindingObj["component_id"] = String(i);
-                                bindingObj["macro_id"] = config.macroId;
+                            // Create binding object for all components
+                            JsonObject bindingObj = bindingsArray.createNestedObject();
+                            bindingObj["component_id"] = String(i);
+                            
+                            // Add binding information based on type
+                            switch (config.type) {
+                                case ACTION_MACRO:
+                                    bindingObj["type"] = "macro";
+                                    bindingObj["macro_id"] = config.macroId;
+                                    bindingObj["display_name"] = config.macroId.isEmpty() ? "None" : config.macroId;
+                                    break;
+                                    
+                                case ACTION_HID:
+                                    bindingObj["type"] = "hid";
+                                    bindingObj["display_name"] = lookupKeyName(config.hidReport, 8, false);
+                                    break;
+                                    
+                                case ACTION_MULTIMEDIA:
+                                    bindingObj["type"] = "multimedia";
+                                    bindingObj["display_name"] = lookupKeyName(config.consumerReport, 4, true);
+                                    break;
+                                    
+                                case ACTION_LAYER:
+                                    bindingObj["type"] = "layer";
+                                    bindingObj["target_layer"] = config.targetLayer;
+                                    bindingObj["display_name"] = "Layer: " + config.targetLayer;
+                                    break;
+                                    
+                                default:
+                                    bindingObj["type"] = "none";
+                                    bindingObj["display_name"] = "None";
+                                    break;
+                            }
+                            
+                            // If this is an encoder component, add special properties
+                            // Get the component ID from the keyHandler if available
+                            String componentId = ""; // We would need to add mapping from index to component ID
+                            
+                            // For now, let's check if it's encoder-1 based on the current structure
+                            if (componentId == "encoder-1" || i == 19 || i == 20 || i == 21) { // Assume encoder indices
+                                // Determine if this is encoder left, right, or button
+                                if (i == 19) { // Left rotation
+                                    bindingObj["encoder_direction"] = "left"; 
+                                } else if (i == 20) { // Right rotation
+                                    bindingObj["encoder_direction"] = "right";
+                                } else if (i == 21) { // Button press
+                                    bindingObj["encoder_direction"] = "button";
+                                }
                             }
                         }
                     }
@@ -781,4 +825,91 @@ String serializedJson(const String& jsonStr) {
     // Return the JSON string without further parsing
     // This avoids double-parsing large JSON structures
     return jsonStr;
+}
+
+// Helper function to lookup key names from reports
+String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) {
+    // Load reports.json
+    if (!SPIFFS.exists("/config/reports.json")) {
+        return "Unknown";
+    }
+    
+    File file = SPIFFS.open("/config/reports.json", "r");
+    if (!file) {
+        return "Error";
+    }
+    
+    // Convert report to hex string for comparison
+    String reportStr = "";
+    for (size_t i = 0; i < reportSize; i++) {
+        char hexStr[8];
+        sprintf(hexStr, "0x%02X", report[i]);
+        if (i > 0) reportStr += ", ";
+        reportStr += hexStr;
+    }
+    
+    // Read through the file and try to find a match
+    // This is not efficient but we don't have enough memory for full JSON parsing
+    String line;
+    String currentCategory = "";
+    String currentKey = "";
+    bool inKeyboard = !isConsumer;
+    bool inConsumer = isConsumer;
+    
+    while (file.available()) {
+        line = file.readStringUntil('\n');
+        line.trim();
+        
+        // Check for category changes
+        if (line.indexOf("\"keyboard\"") >= 0) {
+            inKeyboard = true;
+            inConsumer = false;
+            continue;
+        } else if (line.indexOf("\"consumer\"") >= 0) {
+            inKeyboard = false;
+            inConsumer = true;
+            continue;
+        } else if (line.indexOf("\"modifiers\"") >= 0 || 
+                  line.indexOf("\"basicKeys\"") >= 0 || 
+                  line.indexOf("\"functionKeys\"") >= 0 ||
+                  line.indexOf("\"fKeys\"") >= 0 ||
+                  line.indexOf("\"navigationKeys\"") >= 0 ||
+                  line.indexOf("\"numpadKeys\"") >= 0 ||
+                  line.indexOf("\"specialKeys\"") >= 0 ||
+                  line.indexOf("\"media\"") >= 0 ||
+                  line.indexOf("\"commonCombos\"") >= 0 ||
+                  line.indexOf("\"macros\"") >= 0) {
+            currentCategory = line.substring(line.indexOf("\"") + 1);
+            currentCategory = currentCategory.substring(0, currentCategory.indexOf("\""));
+            continue;
+        }
+        
+        // Check for key definition
+        int keyNameStart = line.indexOf("\"");
+        if (keyNameStart >= 0) {
+            int keyNameEnd = line.indexOf("\"", keyNameStart + 1);
+            if (keyNameEnd > keyNameStart) {
+                currentKey = line.substring(keyNameStart + 1, keyNameEnd);
+                
+                // Check if this line contains our report
+                if (line.indexOf(reportStr) >= 0) {
+                    file.close();
+                    // Format: Category.KeyName
+                    return currentCategory + "." + currentKey;
+                }
+            }
+        }
+    }
+    
+    file.close();
+    
+    // If it's a macro, return "macro"
+    if (isConsumer && report[0] == 0 && report[1] == 0 && report[2] == 0 && report[3] == 0) {
+        return "None";
+    } else if (!isConsumer && report[0] == 0 && report[1] == 0 && report[2] == 0 && 
+              report[3] == 0 && report[4] == 0 && report[5] == 0 && report[6] == 0 && report[7] == 0) {
+        return "None";
+    }
+    
+    return "Custom";
 } 
