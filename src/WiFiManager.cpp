@@ -490,6 +490,96 @@ void WiFiManager::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
                     // Send confirmation
                     client->text("{\"status\":\"" + String(success ? "ok" : "error") + 
                               "\",\"command\":\"save_config\"}");
+                } else if (command == "assign_macro") {
+                    // Handle macro assignment
+                    String macroId = doc["macroId"].as<String>();
+                    String buttonId = doc["buttonId"].as<String>();
+                    
+                    if (keyHandler) {
+                        // Update the button's key binding
+                        bool success = keyHandler->assignMacroToButton(buttonId, macroId);
+                        
+                        // Send confirmation
+                        client->text("{\"status\":\"" + String(success ? "ok" : "error") + 
+                                  "\",\"command\":\"assign_macro\",\"buttonId\":\"" + buttonId + 
+                                  "\",\"macroId\":\"" + macroId + "\"}");
+                    } else {
+                        client->text("{\"status\":\"error\",\"command\":\"assign_macro\",\"error\":\"KeyHandler not initialized\"}");
+                    }
+                } else if (command == "get_all_configs") {
+                    // Send all configurations
+                    // Use a smaller document size and more efficient JSON handling
+                    DynamicJsonDocument configDoc(8192); // Reduced from 16384
+                    
+                    // Get module info
+                    JsonObject moduleObj = configDoc.createNestedObject("module");
+                    moduleObj["type"] = "main";
+                    moduleObj["size"] = "4x4";
+                    moduleObj["components"] = 16;
+                    
+                    // Get LED config - use serialized string instead of nesting another large JSON
+                    configDoc["led_config"] = serializedJson(getLEDConfigJson());
+                    
+                    // Get current layer
+                    if (keyHandler) {
+                        configDoc["current_layer"] = keyHandler->getCurrentLayer();
+                        
+                        // Get key bindings from the current layer - stream directly to avoid memory issues
+                        JsonArray bindingsArray = configDoc.createNestedArray("key_bindings");
+                        
+                        // Debug log to diagnose the issue
+                        USBSerial.printf("Total keys: %d\n", keyHandler->getTotalKeys());
+                        
+                        // Log component positions for debugging
+                        for (size_t i = 0; i < keyHandler->getTotalKeys(); i++) {
+                            const KeyConfig& config = keyHandler->getKeyConfig(i);
+                            USBSerial.printf("Component %d: type=%d, macroId=%s\n", 
+                                         i, (int)config.type, config.macroId.c_str());
+                            
+                            // Add to array only if it has a macro assignment
+                            if (config.type == ACTION_MACRO && !config.macroId.isEmpty()) {
+                                JsonObject bindingObj = bindingsArray.createNestedObject();
+                                bindingObj["component_id"] = String(i);
+                                bindingObj["macro_id"] = config.macroId;
+                            }
+                        }
+                    }
+                    
+                    // Get available macros (limited to names/ids only to save memory)
+                    if (macroHandler) {
+                        JsonArray macrosArray = configDoc.createNestedArray("macros");
+                        std::vector<String> macroIds = macroHandler->getAvailableMacros();
+                        
+                        // Debug log
+                        USBSerial.printf("Available macros: %d\n", macroIds.size());
+                        
+                        for (const String& macroId : macroIds) {
+                            Macro macro;
+                            if (macroHandler->getMacro(macroId, macro)) {
+                                JsonObject macroObj = macrosArray.createNestedObject();
+                                macroObj["id"] = macro.id;
+                                macroObj["name"] = macro.name;
+                                // Only include essential information
+                            }
+                        }
+                    }
+                    
+                    // Stream to string and check size before sending
+                    String message;
+                    serializeJson(configDoc, message);
+                    USBSerial.printf("Config message size: %d bytes\n", message.length());
+                    
+                    // Send in chunks if too large
+                    if (message.length() > 4096) {
+                        USBSerial.println("Large message, sending in chunks...");
+                        // Send first part
+                        client->text(message.substring(0, 4096));
+                        delay(10); // Small delay to allow processing
+                        // Send second part
+                        client->text(message.substring(4096));
+                    } else {
+                        client->text(message);
+                    }
                 }
                 // Additional commands can be added here
             }
@@ -651,4 +741,11 @@ IPAddress WiFiManager::getLocalIP() {
     } else {
         return WiFi.localIP();
     }
+}
+
+// Helper function to handle JSON strings
+String serializedJson(const String& jsonStr) {
+    // Return the JSON string without further parsing
+    // This avoids double-parsing large JSON structures
+    return jsonStr;
 } 

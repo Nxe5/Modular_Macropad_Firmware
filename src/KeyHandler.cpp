@@ -537,3 +537,24 @@ void KeyHandler::performHighPowerTask() {
     // Perform intensive task
     setCpuFrequencyMhz(80);
 }
+
+bool KeyHandler::assignMacroToButton(const String& buttonId, const String& macroId) {
+    // Find the component in the componentPositions vector
+    for (size_t i = 0; i < componentPositions.size(); i++) {
+        if (componentPositions[i].id == buttonId) {
+            // Update the key binding for this component
+            KeyConfig& config = actionMap[i];
+            config.type = ACTION_MACRO;
+            config.macroId = macroId;
+            
+            // Save the updated configuration
+            saveCurrentLayer();
+            
+            USBSerial.printf("Assigned macro %s to button %s\n", macroId.c_str(), buttonId.c_str());
+            return true;
+        }
+    }
+    
+    USBSerial.printf("Button %s not found\n", buttonId.c_str());
+    return false;
+}

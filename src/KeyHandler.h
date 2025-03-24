@@ -64,6 +64,17 @@ public:
     void setCpuFrequencyMhz(uint8_t mhz);
     void performHighPowerTask();
     
+    bool assignMacroToButton(const String& buttonId, const String& macroId);
+    
+    // Add getKeyConfig method
+    const KeyConfig& getKeyConfig(size_t index) const {
+        if (index < componentPositions.size() && actionMap) {
+            return actionMap[index];
+        }
+        static KeyConfig emptyConfig;
+        return emptyConfig;
+    }
+    
 private:
     void cleanup();
     void executeAction(uint8_t keyIndex, KeyAction action);

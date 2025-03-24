@@ -3,41 +3,9 @@
     "layer-name": "default-actions-layer",
     "active": true,
     "layer-config": {
-      "button-0-0": {
-        "type": "macro",
-        "macroId": "copy"
-      },
-      "button-0-1": {
-        "type": "macro",
-        "macroId": "paste"
-      },
-      "button-0-2": {
-        "type": "macro",
-        "macroId": "select_all"
-      },
-      "button-0-3": {
+      "button-1": {
         "type": "macro",
         "macroId": "text_hello"
-      },
-      "button-0-4": {
-        "type": "macro",
-        "macroId": "complex_sequence"
-      },
-      "button-1-0": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
-      },
-      "button-1-1": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
-      },
-      "button-1-2": {
-        "type": "multimedia",
-        "consumerReport": ["0x00", "0x01", "0x00", "0x00"]
-      },
-      "button-1-3": {
-        "type": "multimedia",
-        "consumerReport": ["0x00", "0x02", "0x00", "0x00"]
       },
       "button-2": {
         "type": "hid",
