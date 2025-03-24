@@ -3,6 +3,17 @@
 #include "KeyHandler.h"
 #include "DisplayHandler.h"
 #include "MacroHandler.h"
+#include <ESPAsyncWebServer.h>
+#include <AsyncTCP.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
+#include <FS.h>
+#include <SPIFFS.h>
+#include <ESPmDNS.h>
+#include "config.h"
+
+// Forward declarations
+String serializedJson(const String& jsonStr);
 
 extern USBCDC USBSerial;
 extern KeyHandler* keyHandler;
@@ -202,6 +213,28 @@ void WiFiManager::setupWebServer() {
         // Restart after sending response
         delay(1000);
         ESP.restart();
+    });
+    
+    // Config File API Endpoints
+    
+    // Get components.json config file
+    _server.on("/api/config/components", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/components.json", "application/json");
+    });
+    
+    // Get actions.json config file
+    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/actions.json", "application/json");
+    });
+    
+    // Get info.json config file
+    _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/info.json", "application/json");
+    });
+    
+    // Get LEDs.json config file
+    _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/LEDs.json", "application/json");
     });
     
     // Macro API Endpoints
