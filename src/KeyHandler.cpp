@@ -527,3 +527,13 @@ bool KeyHandler::loadCurrentLayer() {
         return false;
     }
 }
+
+void KeyHandler::setCpuFrequencyMhz(uint8_t mhz) {
+    // Implementation of setCpuFrequencyMhz function
+}
+
+void KeyHandler::performHighPowerTask() {
+    setCpuFrequencyMhz(240);
+    // Perform intensive task
+    setCpuFrequencyMhz(80);
+}
