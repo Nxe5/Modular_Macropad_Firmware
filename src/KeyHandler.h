@@ -60,6 +60,10 @@ public:
     bool isLayerAvailable(const String& layerName) const;
     std::vector<String> getAvailableLayers() const;
     
+    // Add these function declarations:
+    void setCpuFrequencyMhz(uint8_t mhz);
+    void performHighPowerTask();
+    
 private:
     void cleanup();
     void executeAction(uint8_t keyIndex, KeyAction action);
