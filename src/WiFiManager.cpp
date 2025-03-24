@@ -17,7 +17,9 @@ AsyncWebSocket WiFiManager::_ws("/ws");
 bool WiFiManager::_isConnected = false;
 uint32_t WiFiManager::_lastStatusBroadcast = 0;
 uint32_t WiFiManager::_connectAttemptStart = 0;
-const uint32_t WiFiManager::STATUS_BROADCAST_INTERVAL = 1000; // 1 second
+
+// Constants
+const uint32_t WiFiManager::STATUS_BROADCAST_INTERVAL = 5000; // Increased from original value
 const uint32_t WiFiManager::CONNECT_TIMEOUT = 30000; // 30 seconds
 
 void WiFiManager::begin() {

@@ -430,7 +430,11 @@ void loop() {
     updateLEDs();
     
     // Update display
-    updateDisplay();
+    static unsigned long lastDisplayUpdate = 0;
+    if (millis() - lastDisplayUpdate > 1000) { // Update display only once per second
+        updateDisplay();
+        lastDisplayUpdate = millis();
+    }
     
     // Update macro execution
     updateMacroHandler();
@@ -453,5 +457,5 @@ void loop() {
     // No need to call updateKeyHandler here - the task is handling it
     
     // Give other tasks time to run
-    delay(5);
+    delay(20); // Increased delay to reduce update frequency
 }
