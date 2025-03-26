@@ -898,6 +898,135 @@ void WiFiManager::setupWebServer() {
         request->send(response);
     });
     
+    // Get macros.json config file
+    _server.on("/api/config/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/macros.json", "application/json");
+    });
+    
+    // Update macros.json config file
+    _server.on("/api/config/macros", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing macros config update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            // Log the received chunk
+            USBSerial.println("Received chunk:");
+            USBSerial.write(data, len);
+            USBSerial.println();
+
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing complete data:");
+                USBSerial.println(accumulatedData);
+
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                if (!SPIFFS.exists("/config/macros.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Macros config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Write the new config directly to the file
+                File file = SPIFFS.open("/config/macros.json", "w");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open macros config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Serialize the JSON document to ensure proper formatting
+                String jsonString;
+                serializeJson(doc, jsonString);
+                
+                // Log the JSON string before writing
+                USBSerial.println("Writing JSON to file:");
+                USBSerial.println(jsonString);
+                
+                if (file.print(jsonString) != jsonString.length()) {
+                    file.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write macros config to file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                file.close();
+
+                // Verify the file was written correctly
+                File verifyFile = SPIFFS.open("/config/macros.json", "r");
+                if (!verifyFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                String verifyContent = verifyFile.readString();
+                verifyFile.close();
+
+                // Log the verification content
+                USBSerial.println("Verification content:");
+                USBSerial.println(verifyContent);
+
+                // Parse the verification content
+                DynamicJsonDocument verifyDoc(16384);
+                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+                
+                if (verifyError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Success response with verification
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Macros config updated successfully\",\"verified\":true}");
+                accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration if MacroHandler is available
+                if (macroHandler) {
+                    macroHandler->loadMacros();
+                    USBSerial.println("Macros configuration reloaded");
+                }
+            }
+        }
+    );
+
+    // Add CORS preflight handler for macros endpoint
+    _server.on("/api/config/macros", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
     // Macro API Endpoints
     
     // Get list of all macros
