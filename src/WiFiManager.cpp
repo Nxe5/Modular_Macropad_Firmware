@@ -230,100 +230,7 @@ void WiFiManager::setupWebServer() {
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Validate that we received valid JSON
-            DynamicJsonDocument doc(16384); // Increased size for components config
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
-            
-            if (error) {
-                String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                request->send(400, "application/json", errorMsg);
-                return;
-            }
-
-            if (!SPIFFS.exists("/config/components.json")) {
-                request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
-                return;
-            }
-
-            // Write the new config directly to the file
-            File file = SPIFFS.open("/config/components.json", "w");
-            if (!file) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
-                return;
-            }
-
-            // Serialize the JSON document to ensure proper formatting
-            String jsonString;
-            serializeJson(doc, jsonString);
-            
-            if (file.print(jsonString) != jsonString.length()) {
-                file.close();
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config to file\"}");
-                return;
-            }
-
-            file.close();
-
-            // Verify the file was written correctly
-            File verifyFile = SPIFFS.open("/config/components.json", "r");
-            if (!verifyFile) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                return;
-            }
-
-            // Read back the file to verify content
-            String verifyContent = verifyFile.readString();
-            verifyFile.close();
-
-            // Parse the verification content
-            DynamicJsonDocument verifyDoc(16384);
-            DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-            
-            if (verifyError) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                return;
-            }
-
-            // Success response with verification
-            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Components config updated successfully\",\"verified\":true}");
-        }
-    );
-
-    // Add CORS preflight handler for components endpoint
-    _server.on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get actions.json config file
-    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/actions.json", "application/json");
-    });
-    
-    // Update actions.json config file
-    _server.on("/api/config/actions", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing actions config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             static String accumulatedData = "";
-            static bool isFirstChunk = true;
             
             // Add CORS headers
             AsyncWebServerResponse *response = request->beginResponse(200);
@@ -351,7 +258,137 @@ void WiFiManager::setupWebServer() {
                 USBSerial.println(accumulatedData);
 
                 // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384); // Increased size for actions config
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                if (!SPIFFS.exists("/config/components.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Write the new config directly to the file
+                File file = SPIFFS.open("/config/components.json", "w");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Serialize the JSON document to ensure proper formatting
+                String jsonString;
+                serializeJson(doc, jsonString);
+                
+                // Log the JSON string before writing
+                USBSerial.println("Writing JSON to file:");
+                USBSerial.println(jsonString);
+                
+                if (file.print(jsonString) != jsonString.length()) {
+                    file.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config to file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                file.close();
+
+                // Verify the file was written correctly
+                File verifyFile = SPIFFS.open("/config/components.json", "r");
+                if (!verifyFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                String verifyContent = verifyFile.readString();
+                verifyFile.close();
+
+                // Log the verification content
+                USBSerial.println("Verification content:");
+                USBSerial.println(verifyContent);
+
+                // Parse the verification content
+                DynamicJsonDocument verifyDoc(16384);
+                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+                
+                if (verifyError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Success response with verification
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Components config updated successfully\",\"verified\":true}");
+                accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Components configuration reloaded");
+                }
+            }
+        }
+    );
+
+    // Add CORS preflight handler for components endpoint
+    _server.on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Get actions.json config file
+    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/actions.json", "application/json");
+    });
+    
+    // Update actions.json config file
+    _server.on("/api/config/actions", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing actions config update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            // Log the received chunk
+            USBSerial.println("Received chunk:");
+            USBSerial.write(data, len);
+            USBSerial.println();
+
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing complete data:");
+                USBSerial.println(accumulatedData);
+
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
                 DeserializationError error = deserializeJson(doc, accumulatedData);
                 
                 if (error) {
@@ -431,6 +468,13 @@ void WiFiManager::setupWebServer() {
                 // Send success response
                 request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Actions config updated successfully\",\"verified\":true}");
                 accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Actions configuration reloaded");
+                }
             }
         }
     );
@@ -456,6 +500,8 @@ void WiFiManager::setupWebServer() {
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
             // Add CORS headers
             AsyncWebServerResponse *response = request->beginResponse(200);
             response->addHeader("Access-Control-Allow-Origin", "*");
@@ -468,62 +514,98 @@ void WiFiManager::setupWebServer() {
                 return;
             }
 
-            // Validate that we received valid JSON
-            DynamicJsonDocument doc(16384); // Increased size for reports config
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
-            
-            if (error) {
-                String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                request->send(400, "application/json", errorMsg);
-                return;
-            }
+            // Log the received chunk
+            USBSerial.println("Received chunk:");
+            USBSerial.write(data, len);
+            USBSerial.println();
 
-            if (!SPIFFS.exists("/config/reports.json")) {
-                request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
-                return;
-            }
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
 
-            // Write the new config directly to the file
-            File file = SPIFFS.open("/config/reports.json", "w");
-            if (!file) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
-                return;
-            }
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing complete data:");
+                USBSerial.println(accumulatedData);
 
-            // Serialize the JSON document to ensure proper formatting
-            String jsonString;
-            serializeJson(doc, jsonString);
-            
-            if (file.print(jsonString) != jsonString.length()) {
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                if (!SPIFFS.exists("/config/reports.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Write the new config directly to the file
+                File file = SPIFFS.open("/config/reports.json", "w");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Serialize the JSON document to ensure proper formatting
+                String jsonString;
+                serializeJson(doc, jsonString);
+                
+                // Log the JSON string before writing
+                USBSerial.println("Writing JSON to file:");
+                USBSerial.println(jsonString);
+                
+                if (file.print(jsonString) != jsonString.length()) {
+                    file.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write reports config to file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
                 file.close();
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write reports config to file\"}");
-                return;
+
+                // Verify the file was written correctly
+                File verifyFile = SPIFFS.open("/config/reports.json", "r");
+                if (!verifyFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                String verifyContent = verifyFile.readString();
+                verifyFile.close();
+
+                // Log the verification content
+                USBSerial.println("Verification content:");
+                USBSerial.println(verifyContent);
+
+                // Parse the verification content
+                DynamicJsonDocument verifyDoc(16384);
+                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+                
+                if (verifyError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Success response with verification
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Reports config updated successfully\",\"verified\":true}");
+                accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Reports configuration reloaded");
+                }
             }
-
-            file.close();
-
-            // Verify the file was written correctly
-            File verifyFile = SPIFFS.open("/config/reports.json", "r");
-            if (!verifyFile) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                return;
-            }
-
-            // Read back the file to verify content
-            String verifyContent = verifyFile.readString();
-            verifyFile.close();
-
-            // Parse the verification content
-            DynamicJsonDocument verifyDoc(16384);
-            DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-            
-            if (verifyError) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                return;
-            }
-
-            // Success response with verification
-            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Reports config updated successfully\",\"verified\":true}");
         }
     );
 
@@ -548,6 +630,8 @@ void WiFiManager::setupWebServer() {
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
             // Add CORS headers
             AsyncWebServerResponse *response = request->beginResponse(200);
             response->addHeader("Access-Control-Allow-Origin", "*");
@@ -560,62 +644,98 @@ void WiFiManager::setupWebServer() {
                 return;
             }
 
-            // Validate that we received valid JSON
-            DynamicJsonDocument doc(16384); // Increased size for LEDs config
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
-            
-            if (error) {
-                String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                request->send(400, "application/json", errorMsg);
-                return;
-            }
+            // Log the received chunk
+            USBSerial.println("Received chunk:");
+            USBSerial.write(data, len);
+            USBSerial.println();
 
-            if (!SPIFFS.exists("/config/LEDs.json")) {
-                request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
-                return;
-            }
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
 
-            // Write the new config directly to the file
-            File file = SPIFFS.open("/config/LEDs.json", "w");
-            if (!file) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
-                return;
-            }
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing complete data:");
+                USBSerial.println(accumulatedData);
 
-            // Serialize the JSON document to ensure proper formatting
-            String jsonString;
-            serializeJson(doc, jsonString);
-            
-            if (file.print(jsonString) != jsonString.length()) {
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                if (!SPIFFS.exists("/config/LEDs.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Write the new config directly to the file
+                File file = SPIFFS.open("/config/LEDs.json", "w");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Serialize the JSON document to ensure proper formatting
+                String jsonString;
+                serializeJson(doc, jsonString);
+                
+                // Log the JSON string before writing
+                USBSerial.println("Writing JSON to file:");
+                USBSerial.println(jsonString);
+                
+                if (file.print(jsonString) != jsonString.length()) {
+                    file.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write LEDs config to file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
                 file.close();
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write LEDs config to file\"}");
-                return;
+
+                // Verify the file was written correctly
+                File verifyFile = SPIFFS.open("/config/LEDs.json", "r");
+                if (!verifyFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                String verifyContent = verifyFile.readString();
+                verifyFile.close();
+
+                // Log the verification content
+                USBSerial.println("Verification content:");
+                USBSerial.println(verifyContent);
+
+                // Parse the verification content
+                DynamicJsonDocument verifyDoc(16384);
+                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+                
+                if (verifyError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Success response with verification
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LEDs config updated successfully\",\"verified\":true}");
+                accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("LEDs configuration reloaded");
+                }
             }
-
-            file.close();
-
-            // Verify the file was written correctly
-            File verifyFile = SPIFFS.open("/config/LEDs.json", "r");
-            if (!verifyFile) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                return;
-            }
-
-            // Read back the file to verify content
-            String verifyContent = verifyFile.readString();
-            verifyFile.close();
-
-            // Parse the verification content
-            DynamicJsonDocument verifyDoc(16384);
-            DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-            
-            if (verifyError) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                return;
-            }
-
-            // Success response with verification
-            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LEDs config updated successfully\",\"verified\":true}");
         }
     );
 
@@ -636,11 +756,12 @@ void WiFiManager::setupWebServer() {
     // Update info.json config file
     _server.on("/api/config/info", HTTP_POST, 
         [](AsyncWebServerRequest *request) {
-            // Send initial response with proper JSON format
             request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing info config update...\"}");
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
             // Add CORS headers
             AsyncWebServerResponse *response = request->beginResponse(200);
             response->addHeader("Access-Control-Allow-Origin", "*");
@@ -653,62 +774,98 @@ void WiFiManager::setupWebServer() {
                 return;
             }
 
-            // Validate that we received valid JSON
-            DynamicJsonDocument doc(16384); // Increased size for info config
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
-            
-            if (error) {
-                String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                request->send(400, "application/json", errorMsg);
-                return;
-            }
+            // Log the received chunk
+            USBSerial.println("Received chunk:");
+            USBSerial.write(data, len);
+            USBSerial.println();
 
-            if (!SPIFFS.exists("/config/info.json")) {
-                request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
-                return;
-            }
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
 
-            // Write the new config directly to the file
-            File file = SPIFFS.open("/config/info.json", "w");
-            if (!file) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
-                return;
-            }
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing complete data:");
+                USBSerial.println(accumulatedData);
 
-            // Serialize the JSON document to ensure proper formatting
-            String jsonString;
-            serializeJson(doc, jsonString);
-            
-            if (file.print(jsonString) != jsonString.length()) {
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                if (!SPIFFS.exists("/config/info.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Write the new config directly to the file
+                File file = SPIFFS.open("/config/info.json", "w");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Serialize the JSON document to ensure proper formatting
+                String jsonString;
+                serializeJson(doc, jsonString);
+                
+                // Log the JSON string before writing
+                USBSerial.println("Writing JSON to file:");
+                USBSerial.println(jsonString);
+                
+                if (file.print(jsonString) != jsonString.length()) {
+                    file.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write info config to file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
                 file.close();
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write info config to file\"}");
-                return;
+
+                // Verify the file was written correctly
+                File verifyFile = SPIFFS.open("/config/info.json", "r");
+                if (!verifyFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                String verifyContent = verifyFile.readString();
+                verifyFile.close();
+
+                // Log the verification content
+                USBSerial.println("Verification content:");
+                USBSerial.println(verifyContent);
+
+                // Parse the verification content
+                DynamicJsonDocument verifyDoc(16384);
+                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+                
+                if (verifyError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Success response with verification
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Info config updated successfully\",\"verified\":true}");
+                accumulatedData = ""; // Reset for next request
+
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Info configuration reloaded");
+                }
             }
-
-            file.close();
-
-            // Verify the file was written correctly
-            File verifyFile = SPIFFS.open("/config/info.json", "r");
-            if (!verifyFile) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                return;
-            }
-
-            // Read back the file to verify content
-            String verifyContent = verifyFile.readString();
-            verifyFile.close();
-
-            // Parse the verification content
-            DynamicJsonDocument verifyDoc(16384);
-            DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-            
-            if (verifyError) {
-                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                return;
-            }
-
-            // Success response with verification
-            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Info config updated successfully\",\"verified\":true}");
         }
     );
 
