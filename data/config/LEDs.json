@@ -4,7 +4,7 @@
     "active": true,
     "pin": 7,
     "type": "sk6812",
-    "brightness": 64,
+    "brightness": 18,
     "animation": {
       "active": false,
       "mode": 0,

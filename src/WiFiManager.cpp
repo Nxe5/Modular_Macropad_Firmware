@@ -233,6 +233,11 @@ void WiFiManager::setupWebServer() {
         request->send(SPIFFS, "/config/info.json", "application/json");
     });
     
+    // Get reports.json config file
+    _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/reports.json", "application/json");
+    });
+    
     // Get LEDs.json config file
     _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(SPIFFS, "/config/LEDs.json", "application/json");

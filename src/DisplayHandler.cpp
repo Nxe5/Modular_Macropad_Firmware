@@ -51,7 +51,7 @@ void initializeDisplay() {
     display->setCursor(40, 140);
     display->println("Hello");
     display->setCursor(40, 180);
-    display->println("World!");
+    display->println("Andrew!");
     
     USBSerial.println("Test pattern drawn - display ready");
     
