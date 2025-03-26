@@ -143,6 +143,10 @@ void WiFiManager::setupWebServer() {
             bool success = updateLEDConfigFromJson(json);
             if (success) {
                 saveLEDConfig();
+                // Reload LED configuration
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
@@ -335,6 +339,9 @@ void WiFiManager::setupWebServer() {
                     keyHandler->loadKeyConfiguration(actions);
                     USBSerial.println("Components configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
@@ -475,6 +482,9 @@ void WiFiManager::setupWebServer() {
                     keyHandler->loadKeyConfiguration(actions);
                     USBSerial.println("Actions configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
@@ -605,6 +615,9 @@ void WiFiManager::setupWebServer() {
                     keyHandler->loadKeyConfiguration(actions);
                     USBSerial.println("Reports configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
@@ -730,10 +743,14 @@ void WiFiManager::setupWebServer() {
                 accumulatedData = ""; // Reset for next request
 
                 // Reload the configuration
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
+                
                 if (keyHandler) {
                     auto actions = ConfigManager::loadActions("/config/actions.json");
                     keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("LEDs configuration reloaded");
+                    USBSerial.println("Key configuration reloaded");
                 }
             }
         }
@@ -863,8 +880,11 @@ void WiFiManager::setupWebServer() {
                 if (keyHandler) {
                     auto actions = ConfigManager::loadActions("/config/actions.json");
                     keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Info configuration reloaded");
+                    USBSerial.println("Key configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
@@ -1552,4 +1572,5 @@ String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) 
     }
     
     return "Custom";
-} 
+}
+
