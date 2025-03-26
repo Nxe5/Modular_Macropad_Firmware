@@ -223,14 +223,11 @@ void WiFiManager::setupWebServer() {
         request->send(SPIFFS, "/config/components.json", "application/json");
     });
     
-    // Get actions.json config file
-    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/actions.json", "application/json");
-    });
-    
-    // Update actions.json config file
-    _server.on("/api/config/actions", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {},
+    // Update components.json config file
+    _server.on("/api/config/components", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             // Add CORS headers
@@ -245,73 +242,118 @@ void WiFiManager::setupWebServer() {
                 return;
             }
 
-            if (!SPIFFS.exists("/data/config/actions.json")) {
-                request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
+            if (!SPIFFS.exists("/config/components.json")) {
+                request->send(404, "application/json", "{\"error\":\"Components config not found\"}");
                 return;
             }
 
-            // Read current actions config
-            File file = SPIFFS.open("/data/config/actions.json", "r");
+            // Write the new config directly to the file
+            File file = SPIFFS.open("/config/components.json", "w");
             if (!file) {
-                request->send(500, "application/json", "{\"error\":\"Failed to open actions config\"}");
+                request->send(500, "application/json", "{\"error\":\"Failed to write components config\"}");
                 return;
             }
 
-            // Parse current config
-            StaticJsonDocument<4096> doc;
-            DeserializationError error = deserializeJson(doc, file);
-            file.close();
-
-            if (error) {
-                request->send(500, "application/json", "{\"error\":\"Failed to parse current actions config\"}");
-                return;
-            }
-
-            // Parse the new config from the request body
-            StaticJsonDocument<4096> newDoc;
-            error = deserializeJson(newDoc, (char*)data);
-            if (error) {
-                request->send(400, "application/json", "{\"error\":\"Invalid JSON in request body\"}");
-                return;
-            }
-
-            // Get the new layer config from the request
-            JsonObject newConfig = newDoc["actions"]["layer-config"];
-            if (!newConfig) {
-                request->send(400, "application/json", "{\"error\":\"Invalid request format\"}");
-                return;
-            }
-
-            // Update only the components that have new values
-            JsonObject currentLayerConfig = doc["actions"]["layer-config"];
-            for (JsonPair kv : newConfig) {
-                const char* componentId = kv.key().c_str();
-                JsonObject newComponentConfig = kv.value().as<JsonObject>();
-                
-                if (newComponentConfig.isNull()) {
-                    // If the new config is null, remove the component from current config
-                    currentLayerConfig.remove(componentId);
-                } else {
-                    // Update or add the component config
-                    currentLayerConfig[componentId] = newComponentConfig;
-                }
-            }
-
-            // Write the updated config back to the file
-            file = SPIFFS.open("/data/config/actions.json", "w");
-            if (!file) {
-                request->send(500, "application/json", "{\"error\":\"Failed to write actions config\"}");
-                return;
-            }
-
-            if (serializeJson(doc, file) == 0) {
+            if (file.write(data, len) != len) {
                 file.close();
-                request->send(500, "application/json", "{\"error\":\"Failed to write actions config\"}");
+                request->send(500, "application/json", "{\"error\":\"Failed to write components config\"}");
                 return;
             }
 
             file.close();
-            request->send(200, "application/json", "{\"message\":\"Actions config updated successfully\"}");
+            request->send(200, "application/json", "{\"message\":\"Components config updated successfully\"}");
+        }
+    );
+
+    // Add CORS preflight handler for components endpoint
+    _server.on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Get actions.json config file
+    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/actions.json", "application/json");
+    });
+    
+    // Update actions.json config file
+    _server.on("/api/config/actions", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing actions config update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            // Validate that we received valid JSON
+            DynamicJsonDocument doc(8192); // Increased size for actions config
+            DeserializationError error = deserializeJson(doc, (const char*)data, len);
+            
+            if (error) {
+                String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                request->send(400, "application/json", errorMsg);
+                return;
+            }
+
+            if (!SPIFFS.exists("/config/actions.json")) {
+                request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Actions config file not found\"}");
+                return;
+            }
+
+            // Write the new config directly to the file
+            File file = SPIFFS.open("/config/actions.json", "w");
+            if (!file) {
+                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open actions config file for writing\"}");
+                return;
+            }
+
+            // Serialize the JSON document to ensure proper formatting
+            String jsonString;
+            serializeJson(doc, jsonString);
+            
+            if (file.print(jsonString) != jsonString.length()) {
+                file.close();
+                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write actions config to file\"}");
+                return;
+            }
+
+            file.close();
+
+            // Verify the file was written correctly
+            File verifyFile = SPIFFS.open("/config/actions.json", "r");
+            if (!verifyFile) {
+                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
+                return;
+            }
+
+            // Read back the file to verify content
+            String verifyContent = verifyFile.readString();
+            verifyFile.close();
+
+            // Parse the verification content
+            DynamicJsonDocument verifyDoc(8192);
+            DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
+            
+            if (verifyError) {
+                request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
+                return;
+            }
+
+            // Success response with verification
+            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Actions config updated successfully\",\"verified\":true}");
         }
     );
 
@@ -324,19 +366,186 @@ void WiFiManager::setupWebServer() {
         request->send(response);
     });
     
-    // Get info.json config file
-    _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/info.json", "application/json");
-    });
-    
     // Get reports.json config file
     _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(SPIFFS, "/config/reports.json", "application/json");
     });
     
+    // Update reports.json config file
+    _server.on("/api/config/reports", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            if (!SPIFFS.exists("/config/reports.json")) {
+                request->send(404, "application/json", "{\"error\":\"Reports config not found\"}");
+                return;
+            }
+
+            // Write the new config directly to the file
+            File file = SPIFFS.open("/config/reports.json", "w");
+            if (!file) {
+                request->send(500, "application/json", "{\"error\":\"Failed to write reports config\"}");
+                return;
+            }
+
+            if (file.write(data, len) != len) {
+                file.close();
+                request->send(500, "application/json", "{\"error\":\"Failed to write reports config\"}");
+                return;
+            }
+
+            file.close();
+            request->send(200, "application/json", "{\"message\":\"Reports config updated successfully\"}");
+        }
+    );
+
+    // Add CORS preflight handler for reports endpoint
+    _server.on("/api/config/reports", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
     // Get LEDs.json config file
     _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(SPIFFS, "/config/LEDs.json", "application/json");
+    });
+    
+    // Update LEDs.json config file
+    _server.on("/api/config/LEDs", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            if (!SPIFFS.exists("/config/LEDs.json")) {
+                request->send(404, "application/json", "{\"error\":\"LEDs config not found\"}");
+                return;
+            }
+
+            // Write the new config directly to the file
+            File file = SPIFFS.open("/config/LEDs.json", "w");
+            if (!file) {
+                request->send(500, "application/json", "{\"error\":\"Failed to write LEDs config\"}");
+                return;
+            }
+
+            if (file.write(data, len) != len) {
+                file.close();
+                request->send(500, "application/json", "{\"error\":\"Failed to write LEDs config\"}");
+                return;
+            }
+
+            file.close();
+            request->send(200, "application/json", "{\"message\":\"LEDs config updated successfully\"}");
+        }
+    );
+
+    // Add CORS preflight handler for LEDs endpoint
+    _server.on("/api/config/LEDs", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Get info.json config file
+    _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(SPIFFS, "/config/info.json", "application/json");
+    });
+    
+    // Update info.json config file
+    _server.on("/api/config/info", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            // Send initial response with proper JSON format
+            request->send(200, "application/json", "{\"status\":\"processing\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            // Validate that we received valid JSON
+            DynamicJsonDocument doc(4096);
+            DeserializationError error = deserializeJson(doc, (const char*)data, len);
+            
+            if (error) {
+                request->send(400, "application/json", "{\"error\":\"Invalid JSON format\"}");
+                return;
+            }
+
+            if (!SPIFFS.exists("/config/info.json")) {
+                request->send(404, "application/json", "{\"error\":\"Info config not found\"}");
+                return;
+            }
+
+            // Write the new config directly to the file
+            File file = SPIFFS.open("/config/info.json", "w");
+            if (!file) {
+                request->send(500, "application/json", "{\"error\":\"Failed to write info config\"}");
+                return;
+            }
+
+            // Serialize the JSON document to ensure proper formatting
+            String jsonString;
+            serializeJson(doc, jsonString);
+            
+            if (file.print(jsonString) != jsonString.length()) {
+                file.close();
+                request->send(500, "application/json", "{\"error\":\"Failed to write info config\"}");
+                return;
+            }
+
+            file.close();
+            request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Info config updated successfully\"}");
+        }
+    );
+
+    // Add CORS preflight handler for info endpoint
+    _server.on("/api/config/info", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
     });
     
     // Macro API Endpoints
