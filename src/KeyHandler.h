@@ -75,6 +75,9 @@ public:
         return emptyConfig;
     }
     
+    // Add the displayKeyConfig method declaration
+    void displayKeyConfig(const KeyConfig& config);
+    
 private:
     void cleanup();
     void executeAction(uint8_t keyIndex, KeyAction action);

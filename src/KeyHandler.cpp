@@ -558,3 +558,37 @@ bool KeyHandler::assignMacroToButton(const String& buttonId, const String& macro
     USBSerial.printf("Button %s not found\n", buttonId.c_str());
     return false;
 }
+
+void KeyHandler::displayKeyConfig(const KeyConfig& config) {
+    USBSerial.print("  Type: ");
+    
+    switch (config.type) {
+        case ACTION_NONE:
+            USBSerial.println("None");
+            break;
+            
+        case ACTION_HID:
+            USBSerial.println("HID");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 8; i++) {
+                USBSerial.printf("0x%02X", config.hidReport[i]);
+                if (i < 7) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
+        case ACTION_MULTIMEDIA:
+            USBSerial.println("Multimedia");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 4; i++) {
+                USBSerial.printf("0x%02X", config.consumerReport[i]);
+                if (i < 3) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
+        default:
+            USBSerial.println("Unknown");
+            break;
+    }
+}

@@ -5,7 +5,7 @@
     "layer-config": {
       "button-1": {
         "type": "macro",
-        "macroId": "text_hello"
+        "macroId": "mac_chrome_opener"
       },
       "button-2": {
         "type": "hid",

@@ -16,195 +16,268 @@ extern USBCDC USBSerial;
 extern USBHIDMouse Mouse;
 
 MacroHandler::MacroHandler() {
-    isExecutingMacro = false;
-    nextCommandTime = 0;
-    currentCommandIndex = 0;
-    currentMacro = nullptr;
-}
-
-MacroHandler::~MacroHandler() {
-    // Clean up any allocated memory for macros
-    for (auto& macroPair : macros) {
-        for (auto& cmd : macroPair.second.commands) {
-            cleanupMacroCommand(cmd);
-        }
-    }
-    macros.clear();
+    // Constructor - all members are already initialized in the class definition
+    // No additional initialization needed
 }
 
 bool MacroHandler::begin() {
     if (!SPIFFS.begin(true)) {
-        Serial.println("Failed to initialize SPIFFS for macro storage");
+        USBSerial.println("Failed to initialize SPIFFS for macro storage");
         return false;
     }
     
     // Create the macro directory if it doesn't exist
-    if (!ensureMacroDirectoryExists()) {
-        Serial.println("Failed to create macro directory");
-        return false;
-    }
+    ensureMacroDirectoryExists();
     
     // Load all existing macros
     return loadMacros();
 }
 
-bool MacroHandler::ensureMacroDirectoryExists() {
-    if (!SPIFFS.exists(MACRO_DIRECTORY)) {
-        // Create the directory
-        File root = SPIFFS.open(MACRO_DIRECTORY, FILE_WRITE);
-        if (!root) {
-            Serial.printf("Failed to create macro directory: %s\n", MACRO_DIRECTORY);
-            return false;
-        }
-        root.close();
-        
-        // Create an empty index file
-        File indexFile = SPIFFS.open(MACRO_INDEX_FILE, FILE_WRITE);
-        if (!indexFile) {
-            Serial.printf("Failed to create macro index file: %s\n", MACRO_INDEX_FILE);
-            return false;
-        }
-        
-        // Write an empty JSON array to the file
-        indexFile.println("{ \"macros\": [] }");
-        indexFile.close();
+void MacroHandler::ensureMacroDirectoryExists() {
+    if (!SPIFFS.exists("/macros")) {
+        USBSerial.println("Creating macros directory");
+        SPIFFS.mkdir("/macros");
     }
-    return true;
-}
-
-String MacroHandler::getMacroFilePath(const String& macroId) {
-    // Sanitize the macroId (remove invalid characters)
-    String sanitized = macroId;
-    sanitized.replace("/", "_");
-    sanitized.replace("\\", "_");
-    
-    return String(MACRO_DIRECTORY) + "/" + sanitized + ".json";
 }
 
 bool MacroHandler::loadMacros() {
-    // Clear existing macros
+    USBSerial.println("Loading macros from filesystem...");
+    
     macros.clear();
     
-    // Check if the index file exists
-    if (!SPIFFS.exists(MACRO_INDEX_FILE)) {
-        Serial.printf("Macro index file not found: %s\n", MACRO_INDEX_FILE);
+    // Ensure the macros directory exists
+    ensureMacroDirectoryExists();
+    
+    // Scan the macros directory directly without using index.json
+    File root = SPIFFS.open("/macros");
+    if (!root) {
+        USBSerial.println("Failed to open macros directory");
         return false;
     }
     
-    // Read the index file
-    File indexFile = SPIFFS.open(MACRO_INDEX_FILE, "r");
-    if (!indexFile) {
-        Serial.printf("Failed to open macro index file: %s\n", MACRO_INDEX_FILE);
+    if (!root.isDirectory()) {
+        USBSerial.println("Not a directory");
         return false;
     }
     
-    // Parse the JSON index
-    DynamicJsonDocument indexDoc(4096);
-    DeserializationError error = deserializeJson(indexDoc, indexFile);
-    indexFile.close();
+    File file = root.openNextFile();
     
-    if (error) {
-        Serial.printf("Failed to parse macro index: %s\n", error.c_str());
-        return false;
-    }
+    // Count of successfully loaded macros
+    int loadedCount = 0;
     
-    // Iterate through the macro list
-    JsonArray macroArray = indexDoc["macros"].as<JsonArray>();
-    for (JsonObject macroInfo : macroArray) {
-        String macroId = macroInfo["id"].as<String>();
+    while (file) {
+        String path = file.name();
         
-        // Load each macro file
-        String macroPath = getMacroFilePath(macroId);
-        if (!SPIFFS.exists(macroPath)) {
-            Serial.printf("Macro file not found: %s\n", macroPath.c_str());
+        // Skip index.json file if it exists and non-json files
+        if (!path.endsWith(".json") || path.endsWith("index.json")) {
+            file = root.openNextFile();
             continue;
         }
         
-        File macroFile = SPIFFS.open(macroPath, "r");
-        if (!macroFile) {
-            Serial.printf("Failed to open macro file: %s\n", macroPath.c_str());
-            continue;
-        }
+        USBSerial.print("Loading macro from file: ");
+        USBSerial.println(path);
+        
+        // Load the macro file
+        String macroJson = file.readString();
+        file.close();
         
         // Parse the macro JSON
-        DynamicJsonDocument macroDoc(8192);
-        error = deserializeJson(macroDoc, macroFile);
-        macroFile.close();
+        DynamicJsonDocument doc(4096);
+        DeserializationError error = deserializeJson(doc, macroJson);
         
         if (error) {
-            Serial.printf("Failed to parse macro file %s: %s\n", macroPath.c_str(), error.c_str());
+            USBSerial.print("Failed to parse macro JSON: ");
+            USBSerial.println(error.c_str());
+            file = root.openNextFile();
             continue;
         }
         
-        // Convert to a Macro object
+        // Create a macro from the JSON
         Macro macro;
-        if (parseMacroFromJson(macroDoc.as<JsonObject>(), macro)) {
-            // Add to the map
+        if (parseMacroFromJson(doc.as<JsonObject>(), macro)) {
+            // Add to the macros map
             macros[macro.id] = macro;
-            Serial.printf("Loaded macro: %s (%s)\n", macro.id.c_str(), macro.name.c_str());
+            loadedCount++;
+            USBSerial.print("Loaded macro: ");
+            USBSerial.println(macro.id);
+        } else {
+            USBSerial.print("Failed to parse macro: ");
+            USBSerial.println(path);
         }
+        
+        // Move to next file
+        file = root.openNextFile();
     }
     
-    Serial.printf("Loaded %d macros\n", macros.size());
+    USBSerial.print("Loaded ");
+    USBSerial.print(loadedCount);
+    USBSerial.println(" macros");
+    
     return true;
 }
 
 bool MacroHandler::saveMacro(const Macro& macro) {
     // Convert to JSON
     DynamicJsonDocument macroDoc(8192);
-    JsonObject macroJson = macroDoc.to<JsonObject>();
     
-    if (!macroToJson(macro, macroJson)) {
-        Serial.printf("Failed to convert macro to JSON: %s\n", macro.id.c_str());
-        return false;
+    // Fill in the JSON document
+    macroDoc["id"] = macro.id;
+    macroDoc["name"] = macro.name;
+    macroDoc["description"] = macro.description;
+    
+    JsonArray commandsArray = macroDoc.createNestedArray("commands");
+    
+    for (const MacroCommand& cmd : macro.commands) {
+        JsonObject cmdObj = commandsArray.createNestedObject();
+        
+        switch (cmd.type) {
+            case MACRO_CMD_KEY_PRESS:
+                cmdObj["type"] = "key_press";
+                {
+                    JsonArray reportArray = cmdObj.createNestedArray("report");
+                    for (int i = 0; i < 8; i++) {
+                        char hexStr[8];
+                        sprintf(hexStr, "0x%02X", cmd.data.keyPress.report[i]);
+                        reportArray.add(hexStr);
+                    }
+                }
+                break;
+                
+            case MACRO_CMD_KEY_DOWN:
+                cmdObj["type"] = "key_down";
+                {
+                    JsonArray reportArray = cmdObj.createNestedArray("report");
+                    for (int i = 0; i < 8; i++) {
+                        char hexStr[8];
+                        sprintf(hexStr, "0x%02X", cmd.data.keyPress.report[i]);
+                        reportArray.add(hexStr);
+                    }
+                }
+                break;
+                
+            case MACRO_CMD_KEY_UP:
+                cmdObj["type"] = "key_up";
+                {
+                    JsonArray reportArray = cmdObj.createNestedArray("report");
+                    for (int i = 0; i < 8; i++) {
+                        char hexStr[8];
+                        sprintf(hexStr, "0x%02X", cmd.data.keyPress.report[i]);
+                        reportArray.add(hexStr);
+                    }
+                }
+                break;
+                
+            case MACRO_CMD_CONSUMER_PRESS:
+                cmdObj["type"] = "consumer_press";
+                {
+                    JsonArray reportArray = cmdObj.createNestedArray("report");
+                    for (int i = 0; i < 4; i++) {
+                        char hexStr[8];
+                        sprintf(hexStr, "0x%02X", cmd.data.consumerPress.report[i]);
+                        reportArray.add(hexStr);
+                    }
+                }
+                break;
+                
+            case MACRO_CMD_DELAY:
+                cmdObj["type"] = "delay";
+                cmdObj["milliseconds"] = cmd.data.delay.milliseconds;
+                break;
+                
+            case MACRO_CMD_TYPE_TEXT:
+                cmdObj["type"] = "type_text";
+                if (cmd.data.typeText.text) {
+                    cmdObj["text"] = cmd.data.typeText.text;
+                }
+                break;
+                
+            case MACRO_CMD_EXECUTE_MACRO:
+                cmdObj["type"] = "execute_macro";
+                if (cmd.data.executeMacro.macroId) {
+                    cmdObj["macro_id"] = cmd.data.executeMacro.macroId;
+                }
+                break;
+                
+            case MACRO_CMD_MOUSE_MOVE:
+                cmdObj["type"] = "mouse_move";
+                cmdObj["x"] = cmd.data.mouseMove.x;
+                cmdObj["y"] = cmd.data.mouseMove.y;
+                cmdObj["speed"] = cmd.data.mouseMove.speed;
+                break;
+                
+            case MACRO_CMD_MOUSE_CLICK:
+                cmdObj["type"] = "mouse_click";
+                
+                // Convert numeric button to string name for better readability
+                switch (cmd.data.mouseClick.button) {
+                    case MOUSE_LEFT:
+                        cmdObj["button"] = "left";
+                        break;
+                    case MOUSE_RIGHT:
+                        cmdObj["button"] = "right";
+                        break;
+                    case MOUSE_MIDDLE:
+                        cmdObj["button"] = "middle";
+                        break;
+                    case MOUSE_BACK:
+                        cmdObj["button"] = "back";
+                        break;
+                    case MOUSE_FORWARD:
+                        cmdObj["button"] = "forward";
+                        break;
+                    default:
+                        cmdObj["button"] = cmd.data.mouseClick.button;
+                        break;
+                }
+                
+                cmdObj["clicks"] = cmd.data.mouseClick.clicks;
+                break;
+                
+            case MACRO_CMD_MOUSE_SCROLL:
+                cmdObj["type"] = "mouse_scroll";
+                cmdObj["amount"] = cmd.data.mouseScroll.amount;
+                break;
+                
+            case MACRO_CMD_REPEAT_START:
+                cmdObj["type"] = "repeat_start";
+                cmdObj["count"] = cmd.data.repeatStart.count;
+                break;
+                
+            case MACRO_CMD_REPEAT_END:
+                cmdObj["type"] = "repeat_end";
+                break;
+                
+            case MACRO_CMD_RANDOM_DELAY:
+                cmdObj["type"] = "random_delay";
+                cmdObj["min_time"] = cmd.data.randomDelay.minTime;
+                cmdObj["max_time"] = cmd.data.randomDelay.maxTime;
+                break;
+                
+            default:
+                USBSerial.printf("Error: Unknown command type: %d\n", cmd.type);
+                return false;
+        }
     }
     
     // Save to file
     String macroPath = getMacroFilePath(macro.id);
     File macroFile = SPIFFS.open(macroPath, FILE_WRITE);
     if (!macroFile) {
-        Serial.printf("Failed to open macro file for writing: %s\n", macroPath.c_str());
+        USBSerial.printf("Failed to open macro file for writing: %s\n", macroPath.c_str());
         return false;
     }
     
     if (serializeJson(macroDoc, macroFile) == 0) {
-        Serial.printf("Failed to write JSON to macro file: %s\n", macroPath.c_str());
+        USBSerial.printf("Failed to write JSON to macro file: %s\n", macroPath.c_str());
         macroFile.close();
         return false;
     }
     
     macroFile.close();
     
-    // Update the index
-    return updateMacroIndex();
-}
-
-bool MacroHandler::updateMacroIndex() {
-    DynamicJsonDocument indexDoc(4096);
-    JsonArray macroArray = indexDoc.createNestedArray("macros");
+    // Update the macros map
+    macros[macro.id] = macro;
     
-    // Add each macro to the array
-    for (const auto& macroPair : macros) {
-        const Macro& macro = macroPair.second;
-        JsonObject macroInfo = macroArray.createNestedObject();
-        macroInfo["id"] = macro.id;
-        macroInfo["name"] = macro.name;
-    }
-    
-    // Save to file
-    File indexFile = SPIFFS.open(MACRO_INDEX_FILE, FILE_WRITE);
-    if (!indexFile) {
-        Serial.printf("Failed to open macro index file for writing: %s\n", MACRO_INDEX_FILE);
-        return false;
-    }
-    
-    if (serializeJson(indexDoc, indexFile) == 0) {
-        Serial.printf("Failed to write JSON to macro index file: %s\n", MACRO_INDEX_FILE);
-        indexFile.close();
-        return false;
-    }
-    
-    indexFile.close();
     return true;
 }
 
@@ -253,17 +326,20 @@ bool MacroHandler::parseMacroFromJson(const JsonObject& macroObj, Macro& macro) 
             }
             
             // Parse the HID report
-            JsonArray reportArr = cmdObj["report"].as<JsonArray>();
-            if (reportArr.size() > 8) {
-                USBSerial.println("Error: HID report too long");
-                continue;
-            }
-            
-            memset(cmd.data.keyPress.report, 0, 8);
-            int i = 0;
-            for (JsonVariant reportVal : reportArr) {
-                if (i < 8) {
-                    cmd.data.keyPress.report[i++] = reportVal.as<uint8_t>();
+            JsonArray reportArray = cmdObj["report"].as<JsonArray>();
+            for (size_t i = 0; i < min(reportArray.size(), (size_t)8); i++) {
+                // Handle both numeric and hex string representations
+                if (reportArray[i].is<int>()) {
+                    cmd.data.keyPress.report[i] = reportArray[i].as<uint8_t>();
+                } else if (reportArray[i].is<const char*>()) {
+                    // Parse hex string (format: 0x00)
+                    String hexValue = reportArray[i].as<String>();
+                    if (hexValue.startsWith("0x")) {
+                        cmd.data.keyPress.report[i] = strtol(hexValue.c_str(), NULL, 16);
+                    } else {
+                        // Try to parse as decimal
+                        cmd.data.keyPress.report[i] = hexValue.toInt();
+                    }
                 }
             }
             
@@ -276,17 +352,20 @@ bool MacroHandler::parseMacroFromJson(const JsonObject& macroObj, Macro& macro) 
             }
             
             // Parse the consumer report
-            JsonArray reportArr = cmdObj["report"].as<JsonArray>();
-            if (reportArr.size() > 4) {
-                USBSerial.println("Error: Consumer report too long");
-                continue;
-            }
-            
-            memset(cmd.data.consumerPress.report, 0, 4);
-            int i = 0;
-            for (JsonVariant reportVal : reportArr) {
-                if (i < 4) {
-                    cmd.data.consumerPress.report[i++] = reportVal.as<uint8_t>();
+            JsonArray consumerReportArray = cmdObj["report"].as<JsonArray>();
+            for (size_t i = 0; i < min(consumerReportArray.size(), (size_t)4); i++) {
+                // Handle both numeric and hex string representations
+                if (consumerReportArray[i].is<int>()) {
+                    cmd.data.consumerPress.report[i] = consumerReportArray[i].as<uint8_t>();
+                } else if (consumerReportArray[i].is<const char*>()) {
+                    // Parse hex string (format: 0x00)
+                    String hexValue = consumerReportArray[i].as<String>();
+                    if (hexValue.startsWith("0x")) {
+                        cmd.data.consumerPress.report[i] = strtol(hexValue.c_str(), NULL, 16);
+                    } else {
+                        // Try to parse as decimal
+                        cmd.data.consumerPress.report[i] = hexValue.toInt();
+                    }
                 }
             }
             
@@ -448,134 +527,7 @@ bool MacroHandler::parseMacroFromJson(const JsonObject& macroObj, Macro& macro) 
     return true;
 }
 
-bool MacroHandler::macroToJson(const Macro& macro, JsonObject& macroObj) {
-    macroObj["id"] = macro.id;
-    macroObj["name"] = macro.name;
-    macroObj["description"] = macro.description;
-    
-    JsonArray commandsArray = macroObj.createNestedArray("commands");
-    
-    for (const MacroCommand& cmd : macro.commands) {
-        JsonObject cmdObj = commandsArray.createNestedObject();
-        
-        switch (cmd.type) {
-            case MACRO_CMD_KEY_PRESS:
-                cmdObj["type"] = "key_press";
-                {
-                    JsonArray reportArray = cmdObj.createNestedArray("report");
-                    for (int i = 0; i < 8; i++) {
-                        reportArray.add(cmd.data.keyPress.report[i]);
-                    }
-                }
-                break;
-                
-            case MACRO_CMD_KEY_DOWN:
-                cmdObj["type"] = "key_down";
-                {
-                    JsonArray reportArray = cmdObj.createNestedArray("report");
-                    for (int i = 0; i < 8; i++) {
-                        reportArray.add(cmd.data.keyPress.report[i]);
-                    }
-                }
-                break;
-                
-            case MACRO_CMD_KEY_UP:
-                cmdObj["type"] = "key_up";
-                break;
-                
-            case MACRO_CMD_CONSUMER_PRESS:
-                cmdObj["type"] = "consumer_press";
-                {
-                    JsonArray reportArray = cmdObj.createNestedArray("report");
-                    for (int i = 0; i < 4; i++) {
-                        reportArray.add(cmd.data.consumerPress.report[i]);
-                    }
-                }
-                break;
-                
-            case MACRO_CMD_DELAY:
-                cmdObj["type"] = "delay";
-                cmdObj["milliseconds"] = cmd.data.delay.milliseconds;
-                break;
-                
-            case MACRO_CMD_TYPE_TEXT:
-                cmdObj["type"] = "type_text";
-                if (cmd.data.typeText.text) {
-                    cmdObj["text"] = cmd.data.typeText.text;
-                }
-                break;
-                
-            case MACRO_CMD_EXECUTE_MACRO:
-                cmdObj["type"] = "execute_macro";
-                if (cmd.data.executeMacro.macroId) {
-                    cmdObj["macro_id"] = cmd.data.executeMacro.macroId;
-                }
-                break;
-                
-            case MACRO_CMD_MOUSE_MOVE:
-                cmdObj["type"] = "mouse_move";
-                cmdObj["x"] = cmd.data.mouseMove.x;
-                cmdObj["y"] = cmd.data.mouseMove.y;
-                cmdObj["speed"] = cmd.data.mouseMove.speed;
-                break;
-                
-            case MACRO_CMD_MOUSE_CLICK:
-                cmdObj["type"] = "mouse_click";
-                
-                // Convert numeric button to string name for better readability
-                switch (cmd.data.mouseClick.button) {
-                    case MOUSE_LEFT:
-                        cmdObj["button"] = "left";
-                        break;
-                    case MOUSE_RIGHT:
-                        cmdObj["button"] = "right";
-                        break;
-                    case MOUSE_MIDDLE:
-                        cmdObj["button"] = "middle";
-                        break;
-                    case MOUSE_BACK:
-                        cmdObj["button"] = "back";
-                        break;
-                    case MOUSE_FORWARD:
-                        cmdObj["button"] = "forward";
-                        break;
-                    default:
-                        cmdObj["button"] = cmd.data.mouseClick.button;
-                        break;
-                }
-                
-                cmdObj["clicks"] = cmd.data.mouseClick.clicks;
-                break;
-                
-            case MACRO_CMD_MOUSE_SCROLL:
-                cmdObj["type"] = "mouse_scroll";
-                cmdObj["amount"] = cmd.data.mouseScroll.amount;
-                break;
-                
-            case MACRO_CMD_REPEAT_START:
-                cmdObj["type"] = "repeat_start";
-                cmdObj["count"] = cmd.data.repeatStart.count;
-                break;
-                
-            case MACRO_CMD_REPEAT_END:
-                cmdObj["type"] = "repeat_end";
-                break;
-                
-            case MACRO_CMD_RANDOM_DELAY:
-                cmdObj["type"] = "random_delay";
-                cmdObj["min_time"] = cmd.data.randomDelay.minTime;
-                cmdObj["max_time"] = cmd.data.randomDelay.maxTime;
-                break;
-                
-            default:
-                USBSerial.printf("Error: Unknown command type: %d\n", cmd.type);
-                return false;
-        }
-    }
-    
-    return true;
-}
-
+// Helper function to clean up dynamically allocated memory in commands
 void MacroHandler::cleanupMacroCommand(MacroCommand& command) {
     switch (command.type) {
         case MACRO_CMD_TYPE_TEXT:
@@ -603,112 +555,79 @@ bool MacroHandler::executeMacro(const String& macroId) {
     // Check if macro exists
     auto it = macros.find(macroId);
     if (it == macros.end()) {
-        Serial.printf("Macro not found: %s\n", macroId.c_str());
+        USBSerial.printf("Macro not found: %s\n", macroId.c_str());
         return false;
     }
     
-    // If we're already executing a macro, push to the stack
-    if (isExecutingMacro) {
-        // Check for stack overflow or recursion
-        if (macroExecutionStack.size() >= 5) {
-            Serial.println("Macro execution stack overflow");
-            return false;
-        }
-        
-        // Check for recursive calls
-        for (auto* m : macroExecutionStack) {
-            if (m->id == macroId) {
-                Serial.printf("Recursive macro call detected: %s\n", macroId.c_str());
-                return false;
-            }
-        }
-        
-        if (currentMacro) {
-            macroExecutionStack.push_back(currentMacro);
-        }
+    // If we're already executing a macro, we can't nest them in this simplified version
+    if (executing) {
+        USBSerial.println("Already executing a macro, can't start another");
+        return false;
     }
     
     // Start executing the new macro
-    currentMacro = &(it->second);
+    currentMacro = it->second;
     currentCommandIndex = 0;
-    isExecutingMacro = true;
-    nextCommandTime = millis();
+    executing = true;
+    lastExecTime = millis();
+    delayUntil = 0;
     
-    Serial.printf("Starting execution of macro: %s\n", macroId.c_str());
+    USBSerial.printf("Starting execution of macro: %s\n", macroId.c_str());
     return true;
 }
 
-bool MacroHandler::executeCommand(const MacroCommand& command) {
-    // Reset any execution flags for new execution
-    static int repeatStartIndex = -1;
-    static int repeatCount = 0;
-    static int repeatCounter = 0;
-    
-    // Pre-declare all variables used in case statements to fix scope issues
-    int speed = 0;
-    int steps = 0;
-    int x_step = 0;
-    int y_step = 0;
-    int x_remainder = 0;
-    int y_remainder = 0;
-    int multiplier = 0;
-    uint8_t button = 0;
-    uint32_t minTime = 0;
-    uint32_t maxTime = 0;
-    uint32_t randomDelay = 0;
-    
-    switch (command.type) {
-        case MACRO_CMD_KEY_PRESS:
+void MacroHandler::executeCommand(const MacroCommand& cmd) {
+    switch (cmd.type) {
+        case MACRO_CMD_KEY_PRESS: {
             if (hidHandler) {
                 USBSerial.println("Executing key press command");
-                hidHandler->sendKeyboardReport(command.data.keyPress.report);
+                hidHandler->sendKeyboardReport(cmd.data.keyPress.report);
                 delay(50); // Small delay to ensure keypress is registered
                 hidHandler->sendEmptyKeyboardReport();
-                return true;
             }
             break;
+        }
             
-        case MACRO_CMD_KEY_DOWN:
+        case MACRO_CMD_KEY_DOWN: {
             if (hidHandler) {
                 USBSerial.println("Executing key down command");
-                hidHandler->sendKeyboardReport(command.data.keyPress.report);
-                return true;
+                hidHandler->sendKeyboardReport(cmd.data.keyPress.report);
             }
             break;
+        }
             
-        case MACRO_CMD_KEY_UP:
+        case MACRO_CMD_KEY_UP: {
             if (hidHandler) {
                 USBSerial.println("Executing key up command");
                 hidHandler->sendEmptyKeyboardReport();
-                return true;
             }
             break;
+        }
             
-        case MACRO_CMD_CONSUMER_PRESS:
+        case MACRO_CMD_CONSUMER_PRESS: {
             if (hidHandler) {
                 USBSerial.println("Executing consumer control command");
-                hidHandler->sendConsumerReport(command.data.consumerPress.report);
+                hidHandler->sendConsumerReport(cmd.data.consumerPress.report);
                 delay(50); // Small delay to ensure press is registered
                 hidHandler->sendEmptyConsumerReport();
-                return true;
             }
             break;
+        }
             
-        case MACRO_CMD_DELAY:
-            USBSerial.printf("Executing delay: %d ms\n", command.data.delay.milliseconds);
-            delay(command.data.delay.milliseconds);
-            return true;
+        case MACRO_CMD_DELAY: {
+            USBSerial.printf("Executing delay: %d ms\n", cmd.data.delay.milliseconds);
+            delayUntil = millis() + cmd.data.delay.milliseconds;
+            break;
+        }
             
-        case MACRO_CMD_TYPE_TEXT:
-            if (command.data.typeText.text) {
-                USBSerial.printf("Typing text: %s\n", command.data.typeText.text);
-                // Implement text typing using individual key presses
-                // This is a placeholder for actual implementation
-                const char* text = command.data.typeText.text;
-                for (size_t i = 0; i < command.data.typeText.length; i++) {
+        case MACRO_CMD_TYPE_TEXT: {
+            if (cmd.data.typeText.text) {
+                USBSerial.printf("Typing text: %s\n", cmd.data.typeText.text);
+                // Type each character
+                const char* text = cmd.data.typeText.text;
+                for (size_t i = 0; i < cmd.data.typeText.length; i++) {
                     char c = text[i];
                     // Convert character to keypress and send
-                    // This is simplified - a real implementation would map characters to key codes
                     uint8_t report[8] = {0};
                     
                     if (c >= 'a' && c <= 'z') {
@@ -732,33 +651,32 @@ bool MacroHandler::executeCommand(const MacroCommand& command) {
                         delay(5);
                     }
                 }
-                return true;
             }
             break;
+        }
             
-        case MACRO_CMD_EXECUTE_MACRO:
-            if (command.data.executeMacro.macroId) {
-                USBSerial.printf("Executing macro: %s\n", command.data.executeMacro.macroId);
-                executeMacro(command.data.executeMacro.macroId);
-                return true;
+        case MACRO_CMD_EXECUTE_MACRO: {
+            if (cmd.data.executeMacro.macroId) {
+                USBSerial.printf("Ignoring nested macro execution in simplified version: %s\n", 
+                          cmd.data.executeMacro.macroId);
+                // We don't support nested macros in this simplified version
             }
             break;
+        }
             
-        case MACRO_CMD_MOUSE_MOVE:
+        case MACRO_CMD_MOUSE_MOVE: {
             USBSerial.printf("Moving mouse: x=%d, y=%d, speed=%d\n", 
-                          command.data.mouseMove.x, 
-                          command.data.mouseMove.y,
-                          command.data.mouseMove.speed);
+                          cmd.data.mouseMove.x, 
+                          cmd.data.mouseMove.y,
+                          cmd.data.mouseMove.speed);
                           
             // Apply the movement with the specified speed
-            // Speed is used to determine how many times to move (for smaller, smoother movements)
-            // or as a multiplier (for faster, larger movements)
-            speed = command.data.mouseMove.speed;
+            int speed = cmd.data.mouseMove.speed;
             if (speed <= 5) {
                 // For slower speeds, move multiple times with small increments
-                steps = 10 - speed; // 5->5 steps, 1->9 steps
-                x_step = command.data.mouseMove.x / steps;
-                y_step = command.data.mouseMove.y / steps;
+                int steps = 10 - speed; // 5->5 steps, 1->9 steps
+                int x_step = cmd.data.mouseMove.x / steps;
+                int y_step = cmd.data.mouseMove.y / steps;
                 
                 for (int i = 0; i < steps; i++) {
                     Mouse.move(x_step, y_step);
@@ -766,189 +684,105 @@ bool MacroHandler::executeCommand(const MacroCommand& command) {
                 }
                 
                 // Handle any remainder
-                x_remainder = command.data.mouseMove.x % steps;
-                y_remainder = command.data.mouseMove.y % steps;
+                int x_remainder = cmd.data.mouseMove.x % steps;
+                int y_remainder = cmd.data.mouseMove.y % steps;
                 if (x_remainder || y_remainder) {
                     Mouse.move(x_remainder, y_remainder);
                 }
             } else {
                 // For faster speeds, multiply the movement
-                multiplier = speed - 4; // 6->2x, 10->6x
-                Mouse.move(command.data.mouseMove.x * multiplier, 
-                          command.data.mouseMove.y * multiplier);
+                int multiplier = speed - 4; // 6->2x, 10->6x
+                Mouse.move(cmd.data.mouseMove.x * multiplier, 
+                          cmd.data.mouseMove.y * multiplier);
             }
-            return true;
+            break;
+        }
             
-        case MACRO_CMD_MOUSE_CLICK:
+        case MACRO_CMD_MOUSE_CLICK: {
             USBSerial.printf("Mouse click: button=%d, clicks=%d\n", 
-                          command.data.mouseClick.button, 
-                          command.data.mouseClick.clicks);
+                          cmd.data.mouseClick.button, 
+                          cmd.data.mouseClick.clicks);
                           
-            // Convert button name to button value if needed
-            button = command.data.mouseClick.button;
-            
             // Execute single or multiple clicks
-            for (uint8_t i = 0; i < command.data.mouseClick.clicks; i++) {
+            uint8_t button = cmd.data.mouseClick.button;
+            for (uint8_t i = 0; i < cmd.data.mouseClick.clicks; i++) {
                 Mouse.click(button);
                 
                 // Add a small delay between multiple clicks
-                if (i < command.data.mouseClick.clicks - 1) {
+                if (i < cmd.data.mouseClick.clicks - 1) {
                     delay(50);
                 }
             }
-            return true;
+            break;
+        }
             
-        case MACRO_CMD_MOUSE_SCROLL:
-            USBSerial.printf("Mouse scroll: amount=%d\n", command.data.mouseScroll.amount);
+        case MACRO_CMD_MOUSE_SCROLL: {
+            USBSerial.printf("Mouse scroll: amount=%d\n", cmd.data.mouseScroll.amount);
             
             // Scroll the specified amount - USBHIDMouse uses move(x, y, wheel)
             // where wheel is the scroll amount
-            Mouse.move(0, 0, command.data.mouseScroll.amount);
-            return true;
+            Mouse.move(0, 0, cmd.data.mouseScroll.amount);
+            break;
+        }
             
-        case MACRO_CMD_REPEAT_START:
-            USBSerial.printf("Starting repeat block: count=%d\n", command.data.repeatStart.count);
+        case MACRO_CMD_REPEAT_START: {
+            USBSerial.printf("Starting repeat block: count=%d\n", cmd.data.repeatStart.count);
+            // Handle repeat start
+            inRepeat = true;
+            repeatCount = cmd.data.repeatStart.count;
+            currentRepeatCount = 0;
             repeatStartIndex = currentCommandIndex;
-            repeatCount = command.data.repeatStart.count;
-            repeatCounter = 0;
-            return true;
+            break;
+        }
             
-        case MACRO_CMD_REPEAT_END:
+        case MACRO_CMD_REPEAT_END: {
             USBSerial.println("End of repeat block");
-            if (repeatStartIndex >= 0 && repeatCounter < repeatCount - 1) {
+            if (inRepeat && currentRepeatCount < repeatCount - 1) {
                 // Jump back to the repeat start command
-                repeatCounter++;
+                currentRepeatCount++;
                 USBSerial.printf("Repeating block: iteration %d/%d\n", 
-                              repeatCounter + 1, repeatCount);
+                              currentRepeatCount + 1, repeatCount);
                 currentCommandIndex = repeatStartIndex;
             } else {
                 // Reset repeat state
-                repeatStartIndex = -1;
+                inRepeat = false;
                 repeatCount = 0;
-                repeatCounter = 0;
+                currentRepeatCount = 0;
             }
-            return true;
+            break;
+        }
             
-        case MACRO_CMD_RANDOM_DELAY:
+        case MACRO_CMD_RANDOM_DELAY: {
             // Generate a random delay between min and max
-            minTime = command.data.randomDelay.minTime;
-            maxTime = command.data.randomDelay.maxTime;
-            randomDelay = random(minTime, maxTime + 1);
+            uint32_t minTime = cmd.data.randomDelay.minTime;
+            uint32_t maxTime = cmd.data.randomDelay.maxTime;
+            uint32_t randomDelay = random(minTime, maxTime + 1);
             
             USBSerial.printf("Random delay: %d ms (range: %d-%d ms)\n", 
                           randomDelay, minTime, maxTime);
                           
-            delay(randomDelay);
-            return true;
-            
-        default:
-            USBSerial.printf("Unknown command type: %d\n", command.type);
+            delayUntil = millis() + randomDelay;
             break;
+        }
+            
+        default: {
+            USBSerial.printf("Unknown command type: %d\n", cmd.type);
+            break;
+        }
     }
-    
-    return false;
-}
-
-MacroCommand MacroHandler::createKeyPressCommand(const uint8_t* report) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_KEY_PRESS;
-    memcpy(cmd.data.keyPress.report, report, 8);
-    return cmd;
-}
-
-MacroCommand MacroHandler::createConsumerPressCommand(const uint8_t* report) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_CONSUMER_PRESS;
-    memcpy(cmd.data.consumerPress.report, report, 4);
-    return cmd;
-}
-
-MacroCommand MacroHandler::createDelayCommand(uint32_t milliseconds) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_DELAY;
-    cmd.data.delay.milliseconds = milliseconds;
-    return cmd;
-}
-
-MacroCommand MacroHandler::createTypeTextCommand(const char* text) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_TYPE_TEXT;
-    
-    size_t len = strlen(text);
-    cmd.data.typeText.length = len;
-    cmd.data.typeText.text = (char*)malloc(len + 1);
-    
-    if (cmd.data.typeText.text) {
-        strcpy(cmd.data.typeText.text, text);
-    } else {
-        Serial.println("Failed to allocate memory for text command");
-    }
-    
-    return cmd;
-}
-
-MacroCommand MacroHandler::createExecuteMacroCommand(const char* macroId) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_EXECUTE_MACRO;
-    
-    size_t len = strlen(macroId);
-    cmd.data.executeMacro.macroId = (char*)malloc(len + 1);
-    
-    if (cmd.data.executeMacro.macroId) {
-        strcpy(cmd.data.executeMacro.macroId, macroId);
-    } else {
-        Serial.println("Failed to allocate memory for macro ID");
-    }
-    
-    return cmd;
-}
-
-bool MacroHandler::createMacro(const String& id, const String& name, const String& description) {
-    // Check if macro already exists
-    if (macros.find(id) != macros.end()) {
-        Serial.printf("Macro already exists: %s\n", id.c_str());
-        return false;
-    }
-    
-    // Create a new macro
-    Macro macro;
-    macro.id = id;
-    macro.name = name;
-    macro.description = description;
-    
-    // Add to the map
-    macros[id] = macro;
-    
-    // Save to storage
-    return saveMacro(macro);
-}
-
-bool MacroHandler::addCommandToMacro(const String& macroId, const MacroCommand& command) {
-    // Check if macro exists
-    auto it = macros.find(macroId);
-    if (it == macros.end()) {
-        Serial.printf("Macro not found: %s\n", macroId.c_str());
-        return false;
-    }
-    
-    // Add the command to the macro
-    Macro& macro = it->second;
-    macro.commands.push_back(command);
-    
-    // Save the updated macro
-    return saveMacro(macro);
 }
 
 bool MacroHandler::deleteMacro(const String& macroId) {
     // Check if macro exists
     auto it = macros.find(macroId);
     if (it == macros.end()) {
-        Serial.printf("Macro not found: %s\n", macroId.c_str());
+        USBSerial.printf("Macro not found: %s\n", macroId.c_str());
         return false;
     }
     
-    // Cleanup the macro commands
+    // Free any dynamically allocated memory in the macro
     for (auto& cmd : it->second.commands) {
+        // Use the helper function to clean up allocated memory
         cleanupMacroCommand(cmd);
     }
     
@@ -959,90 +793,90 @@ bool MacroHandler::deleteMacro(const String& macroId) {
     String macroPath = getMacroFilePath(macroId);
     if (SPIFFS.exists(macroPath)) {
         if (!SPIFFS.remove(macroPath)) {
-            Serial.printf("Failed to delete macro file: %s\n", macroPath.c_str());
+            USBSerial.printf("Failed to delete macro file: %s\n", macroPath.c_str());
             return false;
         }
     }
     
-    // Update the index
-    return updateMacroIndex();
+    return true;
 }
 
-std::vector<String> MacroHandler::getAvailableMacros() {
-    std::vector<String> result;
-    for (const auto& macroPair : macros) {
-        result.push_back(macroPair.first);
-    }
-    return result;
-}
-
-bool MacroHandler::getMacro(const String& macroId, Macro& outMacro) {
+bool MacroHandler::getMacro(const String& macroId, Macro& macro) {
     // Check if macro exists
     auto it = macros.find(macroId);
     if (it == macros.end()) {
-        Serial.printf("Macro not found: %s\n", macroId.c_str());
+        USBSerial.printf("Macro not found: %s\n", macroId.c_str());
         return false;
     }
     
     // Copy the macro
-    outMacro = it->second;
+    macro = it->second;
     return true;
 }
 
 void MacroHandler::update() {
-    if (!isExecutingMacro || !currentMacro) {
+    if (!executing) {
         return;
     }
     
-    // Check if it's time to execute the next command
-    unsigned long currentTime = millis();
-    if (currentTime < nextCommandTime) {
-        return;
+    uint32_t currentTime = millis();
+    
+    // If we're in a delay, wait for it to complete
+    if (delayUntil > 0) {
+        if (currentTime < delayUntil) {
+            return; // Still waiting
+        }
+        // Delay completed
+        delayUntil = 0;
     }
     
     // Check if we've reached the end of the macro
-    if (currentCommandIndex >= currentMacro->commands.size()) {
-        // Macro complete - check if we have more macros on the stack
-        if (!macroExecutionStack.empty()) {
-            // Pop the next macro from the stack
-            currentMacro = macroExecutionStack.back();
-            macroExecutionStack.pop_back();
-            currentCommandIndex = 0;
-            nextCommandTime = currentTime;
-            
-            Serial.printf("Resuming macro: %s\n", currentMacro->id.c_str());
-        } else {
-            // No more macros to execute
-            isExecutingMacro = false;
-            currentMacro = nullptr;
-            Serial.println("Macro execution complete");
-        }
+    if (currentCommandIndex >= currentMacro.commands.size()) {
+        // Macro complete
+        executing = false;
+        USBSerial.println("Macro execution complete");
         return;
     }
     
     // Execute the current command
-    const MacroCommand& cmd = currentMacro->commands[currentCommandIndex];
-    bool success = executeCommand(cmd);
+    const MacroCommand& cmd = currentMacro.commands[currentCommandIndex];
+    executeCommand(cmd);
     
-    if (success) {
-        // Move to the next command
+    // If not in a delay, move to the next command
+    if (delayUntil == 0) {
         currentCommandIndex++;
-        
-        // Set the time for the next command execution
-        // For delay commands, use the specified delay
-        // For other commands, use a small default delay
-        if (cmd.type == MACRO_CMD_DELAY) {
-            nextCommandTime = currentTime + cmd.data.delay.milliseconds;
-        } else {
-            nextCommandTime = currentTime + 50; // Default delay between commands
-        }
-    } else {
-        // Command execution failed - stop executing the macro
-        Serial.println("Macro command execution failed");
-        isExecutingMacro = false;
-        currentMacro = nullptr;
-        macroExecutionStack.clear();
     }
+    
+    lastExecTime = currentTime;
+}
+
+std::vector<String> MacroHandler::getAvailableMacros() {
+    std::vector<String> result;
+    
+    // Ensure the directory exists
+    ensureMacroDirectoryExists();
+    
+    // Scan the directory directly
+    File root = SPIFFS.open("/macros");
+    if (!root || !root.isDirectory()) {
+        USBSerial.println("Failed to open macros directory in getAvailableMacros");
+        return result;
+    }
+    
+    File file = root.openNextFile();
+    while (file) {
+        String path = file.name();
+        // Skip index.json if it exists and non-json files
+        if (path.endsWith(".json") && !path.endsWith("index.json")) {
+            // Extract the macro ID from the filename (remove .json extension)
+            String fileName = path.substring(path.lastIndexOf('/') + 1);
+            String macroId = fileName.substring(0, fileName.lastIndexOf('.'));
+            result.push_back(macroId);
+        }
+        file = root.openNextFile();
+    }
+    
+    return result;
 }
 
 // Global function implementations
@@ -1051,11 +885,11 @@ void initializeMacroHandler() {
         macroHandler = new MacroHandler();
         if (macroHandler) {
             if (!macroHandler->begin()) {
-                Serial.println("Failed to initialize macro handler");
+                USBSerial.println("Failed to initialize macro handler");
                 delete macroHandler;
                 macroHandler = nullptr;
             } else {
-                Serial.println("Macro handler initialized");
+                USBSerial.println("Macro handler initialized");
             }
         }
     }
@@ -1072,55 +906,4 @@ void cleanupMacroHandler() {
         delete macroHandler;
         macroHandler = nullptr;
     }
-}
-
-// Create mouse move command
-MacroCommand MacroHandler::createMouseMoveCommand(int16_t x, int16_t y, uint8_t speed) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_MOUSE_MOVE;
-    cmd.data.mouseMove.x = x;
-    cmd.data.mouseMove.y = y;
-    cmd.data.mouseMove.speed = speed;
-    return cmd;
-}
-
-// Create mouse click command
-MacroCommand MacroHandler::createMouseClickCommand(uint8_t button, uint8_t clicks) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_MOUSE_CLICK;
-    cmd.data.mouseClick.button = button;
-    cmd.data.mouseClick.clicks = clicks;
-    return cmd;
-}
-
-// Create mouse scroll command
-MacroCommand MacroHandler::createMouseScrollCommand(int8_t amount) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_MOUSE_SCROLL;
-    cmd.data.mouseScroll.amount = amount;
-    return cmd;
-}
-
-// Create repeat start command
-MacroCommand MacroHandler::createRepeatStartCommand(uint16_t count) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_REPEAT_START;
-    cmd.data.repeatStart.count = count;
-    return cmd;
-}
-
-// Create repeat end command
-MacroCommand MacroHandler::createRepeatEndCommand() {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_REPEAT_END;
-    return cmd;
-}
-
-// Create random delay command
-MacroCommand MacroHandler::createRandomDelayCommand(uint32_t minTime, uint32_t maxTime) {
-    MacroCommand cmd;
-    cmd.type = MACRO_CMD_RANDOM_DELAY;
-    cmd.data.randomDelay.minTime = minTime;
-    cmd.data.randomDelay.maxTime = maxTime;
-    return cmd;
 } 

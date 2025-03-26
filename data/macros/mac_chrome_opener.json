@@ -1,0 +1,27 @@
+{
+  "id": "mac_chrome_opener",
+  "name": "Mac Chrome Opener",
+  "description": "Opens Chrome browser on Mac",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "duration": 100
+    },
+    {
+      "type": "type_text",
+      "text": "Chrome"
+    },
+    {
+      "type": "delay",
+      "duration": 500
+    },
+    {
+      "type": "key_press",
+      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 

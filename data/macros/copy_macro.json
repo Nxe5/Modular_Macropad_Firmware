@@ -1,0 +1,11 @@
+{
+  "id": "copy_macro",
+  "name": "Copy",
+  "description": "Standard Copy Command (Ctrl+C)",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x01", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 

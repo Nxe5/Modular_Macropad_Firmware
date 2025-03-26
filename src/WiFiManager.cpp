@@ -898,138 +898,7 @@ void WiFiManager::setupWebServer() {
         request->send(response);
     });
     
-    // Get macros.json config file
-    _server.on("/api/config/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/macros.json", "application/json");
-    });
-    
-    // Update macros.json config file
-    _server.on("/api/config/macros", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing macros config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/macros.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Macros config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/macros.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open macros config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write macros config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/macros.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Macros config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration if MacroHandler is available
-                if (macroHandler) {
-                    macroHandler->loadMacros();
-                    USBSerial.println("Macros configuration reloaded");
-                }
-            }
-        }
-    );
-
-    // Add CORS preflight handler for macros endpoint
-    _server.on("/api/config/macros", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Macro API Endpoints
-    
-    // Get list of all macros
+    // Get macros list
     _server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
         DynamicJsonDocument doc(4096);
         JsonArray macroArray = doc.createNestedArray("macros");
@@ -1053,6 +922,105 @@ void WiFiManager::setupWebServer() {
         serializeJson(doc, output);
         request->send(200, "application/json", output);
     });
+
+    // Get macros list (old endpoint for backwards compatibility)
+    _server.on("/api/config/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
+        // Scan the directory directly instead of using an index file
+        DynamicJsonDocument doc(4096);
+        JsonArray macroArray = doc.createNestedArray("macros");
+        
+        if (macroHandler) {
+            std::vector<String> macroIds = macroHandler->getAvailableMacros();
+            
+            for (const String& macroId : macroIds) {
+                Macro macro;
+                if (macroHandler->getMacro(macroId, macro)) {
+                    JsonObject macroObj = macroArray.createNestedObject();
+                    macroObj["id"] = macro.id;
+                    macroObj["name"] = macro.name;
+                    macroObj["description"] = macro.description;
+                }
+            }
+        }
+        
+        String output;
+        serializeJson(doc, output);
+        request->send(200, "application/json", output);
+    });
+
+    // Update macros configuration - now handled by the /api/macros endpoints
+    _server.on("/api/config/macros", HTTP_POST, 
+        [](AsyncWebServerRequest *request) {
+            // This endpoint is now deprecated, but we'll keep it for backward compatibility
+            request->send(200, "application/json", "{\"status\":\"warning\",\"message\":\"Using deprecated endpoint - please use /api/macros instead\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                // Validate that we received valid JSON
+                DynamicJsonDocument doc(16384);
+                DeserializationError error = deserializeJson(doc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+
+                // Process each macro in the JSON
+                if (doc.containsKey("macros")) {
+                    JsonArray macroArray = doc["macros"].as<JsonArray>();
+                    
+                    for (JsonObject macroJson : macroArray) {
+                        if (!macroJson.containsKey("id")) {
+                            continue; // Skip macros without ID
+                        }
+                        
+                        // Create a macro object
+                        Macro macro;
+                        if (macroHandler && macroHandler->parseMacroFromJson(macroJson, macro)) {
+                            macroHandler->saveMacro(macro);
+                        }
+                    }
+                    
+                    // Reload the configuration
+                    if (macroHandler) {
+                        macroHandler->loadMacros();
+                        USBSerial.println("Macros configuration reloaded");
+                    }
+                    
+                    // Success response
+                    request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Macros updated successfully\"}");
+                } else {
+                    request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid macro format - missing 'macros' key\"}");
+                }
+                
+                accumulatedData = ""; // Reset for next request
+            }
+        }
+    );
+
+    // Macro API Endpoints
     
     // Get a specific macro by ID
     _server.on("/api/macros/^([a-zA-Z0-9_-]+)$", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -1366,31 +1334,57 @@ void WiFiManager::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client
                             // Add binding information based on type
                             switch (config.type) {
                                 case ACTION_MACRO:
+                                {
                                     bindingObj["type"] = "macro";
                                     bindingObj["macro_id"] = config.macroId;
                                     bindingObj["display_name"] = config.macroId.isEmpty() ? "None" : config.macroId;
                                     break;
+                                }
                                     
                                 case ACTION_HID:
+                                {
                                     bindingObj["type"] = "hid";
                                     bindingObj["display_name"] = lookupKeyName(config.hidReport, 8, false);
+                                    
+                                    // Add hex representation of the report
+                                    JsonArray reportArray = bindingObj.createNestedArray("report");
+                                    for (int i = 0; i < 8; i++) {
+                                        char hexStr[8];
+                                        sprintf(hexStr, "0x%02X", config.hidReport[i]);
+                                        reportArray.add(hexStr);
+                                    }
                                     break;
+                                }
                                     
                                 case ACTION_MULTIMEDIA:
+                                {
                                     bindingObj["type"] = "multimedia";
                                     bindingObj["display_name"] = lookupKeyName(config.consumerReport, 4, true);
+                                    
+                                    // Add hex representation of the report
+                                    JsonArray reportArray = bindingObj.createNestedArray("report");
+                                    for (int i = 0; i < 4; i++) {
+                                        char hexStr[8];
+                                        sprintf(hexStr, "0x%02X", config.consumerReport[i]);
+                                        reportArray.add(hexStr);
+                                    }
                                     break;
+                                }
                                     
                                 case ACTION_LAYER:
+                                {
                                     bindingObj["type"] = "layer";
                                     bindingObj["target_layer"] = config.targetLayer;
                                     bindingObj["display_name"] = "Layer: " + config.targetLayer;
                                     break;
+                                }
                                     
                                 default:
+                                {
                                     bindingObj["type"] = "none";
                                     bindingObj["display_name"] = "None";
                                     break;
+                                }
                             }
                             
                             // If this is an encoder component, add special properties

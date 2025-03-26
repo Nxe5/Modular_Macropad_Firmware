@@ -9,6 +9,9 @@
 #include <SPIFFS.h>
 #include "HIDHandler.h"
 
+// Path constants
+const char* const MACRO_DIRECTORY = "/macros";
+
 // Macro command types
 enum MacroCommandType {
     MACRO_CMD_KEY_PRESS,      // Press and release key(s)
@@ -86,91 +89,63 @@ struct Macro {
 };
 
 class MacroHandler {
-public:
-    MacroHandler();
-    ~MacroHandler();
-
-    // Initialize the handler
-    bool begin();
-
-    // Load all macros from SPIFFS
-    bool loadMacros();
-
-    // Save macro to SPIFFS
-    bool saveMacro(const Macro& macro);
-
-    // Delete macro from SPIFFS
-    bool deleteMacro(const String& macroId);
-
-    // Execute a macro by ID
-    bool executeMacro(const String& macroId);
-
-    // Create a new macro
-    bool createMacro(const String& id, const String& name, const String& description);
-
-    // Add a command to an existing macro
-    bool addCommandToMacro(const String& macroId, const MacroCommand& command);
-
-    // Parse a JSON macro definition
-    bool parseMacroFromJson(const JsonObject& macroJson, Macro& outMacro);
-
-    // Convert a macro to JSON for storage
-    bool macroToJson(const Macro& macro, JsonObject& outJson);
-
-    // Get a list of all available macros
-    std::vector<String> getAvailableMacros();
-
-    // Get a specific macro by ID
-    bool getMacro(const String& macroId, Macro& outMacro);
-
-    // Check if any macro is currently executing
-    bool isExecuting() const { return isExecutingMacro; }
-
-    // Update method called from the main loop
-    void update();
-
 private:
-    // Map to store all loaded macros
+    // Map to store all loaded macros, keyed by their IDs
     std::map<String, Macro> macros;
-
-    // Execution state
-    bool isExecutingMacro;
-    unsigned long nextCommandTime;
-    size_t currentCommandIndex;
-    Macro* currentMacro;
-    std::vector<Macro*> macroExecutionStack; // For handling nested macros
+    
+    // Currently executing macro (if any)
+    bool executing = false;
+    size_t currentCommandIndex = 0;
+    Macro currentMacro;
+    uint32_t lastExecTime = 0;
+    uint32_t delayUntil = 0;
     
     // Repeat state
-    struct RepeatState {
-        size_t startIndex;
-        uint16_t count;
-        uint16_t executed;
-    };
-    std::vector<RepeatState> repeatStack;
-
-    // Path to macro storage directory
-    const char* MACRO_DIRECTORY = "/macros";
+    bool inRepeat = false;
+    int repeatCount = 0;
+    int currentRepeatCount = 0;
+    size_t repeatStartIndex = 0;
     
-    // Path to macro index file (stores list of all macros)
-    const char* MACRO_INDEX_FILE = "/macros/index.json";
-
-    // Helper methods
-    String getMacroFilePath(const String& macroId);
-    bool ensureMacroDirectoryExists();
-    bool updateMacroIndex();
-    bool executeCommand(const MacroCommand& command);
+    // Path functions
+    String getMacroFilePath(const String& macroId) {
+        // Sanitize the macroId (remove invalid characters)
+        String sanitized = macroId;
+        sanitized.replace("/", "_");
+        sanitized.replace("\\", "_");
+        
+        return String(MACRO_DIRECTORY) + "/" + sanitized + ".json";
+    }
+    
+    // Ensure directory exists
+    void ensureMacroDirectoryExists();
+    
+    // Helper function to clean up dynamically allocated memory in commands
     void cleanupMacroCommand(MacroCommand& command);
-    MacroCommand createKeyPressCommand(const uint8_t* report);
-    MacroCommand createConsumerPressCommand(const uint8_t* report);
-    MacroCommand createDelayCommand(uint32_t milliseconds);
-    MacroCommand createTypeTextCommand(const char* text);
-    MacroCommand createExecuteMacroCommand(const char* macroId);
-    MacroCommand createMouseMoveCommand(int16_t x, int16_t y, uint8_t speed);
-    MacroCommand createMouseClickCommand(uint8_t button, uint8_t clicks);
-    MacroCommand createMouseScrollCommand(int8_t amount);
-    MacroCommand createRepeatStartCommand(uint16_t count);
-    MacroCommand createRepeatEndCommand();
-    MacroCommand createRandomDelayCommand(uint32_t minTime, uint32_t maxTime);
+    
+public:
+    MacroHandler();
+    
+    // Initialization
+    bool begin();
+    
+    // Macro management
+    bool loadMacros();
+    bool saveMacro(const Macro& macro);
+    bool deleteMacro(const String& macroId);
+    bool getMacro(const String& macroId, Macro& macro);
+    std::vector<String> getAvailableMacros();
+    
+    // Macro execution
+    bool executeMacro(const String& macroId);
+    void executeCommand(const MacroCommand& cmd);
+    void update();
+    bool isExecuting() const { return executing; }
+    
+    // Parsing
+    bool parseMacroFromJson(const JsonObject& json, Macro& macro);
+
+    // For backward compatibility - now a no-op
+    bool saveMacroIndex() { return true; }
 };
 
 // Global macro handler instance

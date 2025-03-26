@@ -1,0 +1,11 @@
+{
+  "id": "paste_macro",
+  "name": "Paste",
+  "description": "Standard Paste Command (Ctrl+V)",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x01", "0x00", "0x19", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 
