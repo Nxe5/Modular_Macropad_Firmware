@@ -125,6 +125,60 @@ void WiFiManager::setupWebServer() {
     // Serve assets files
     _server.serveStatic("/assets/", SPIFFS, "/web/assets/");
     
+    // Add a catch-all handler for JavaScript files to ensure proper MIME type
+    _server.on("/*", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String path = request->url();
+        
+        // Check if this is a JS file
+        if (path.endsWith(".js")) {
+            USBSerial.printf("Serving JS file: %s\n", path.c_str());
+            
+            // Remove leading slash for SPIFFS path
+            if (path.startsWith("/")) {
+                path = path.substring(1);
+            }
+            
+            String fullPath = "/web/" + path;
+            USBSerial.printf("Full path: %s\n", fullPath.c_str());
+            
+            if (SPIFFS.exists(fullPath)) {
+                USBSerial.printf("File found, serving with proper MIME type\n");
+                request->send(SPIFFS, fullPath, "application/javascript");
+                return;
+            } else {
+                USBSerial.printf("File not found: %s\n", fullPath.c_str());
+                request->send(404, "text/plain", "File Not Found");
+                return;
+            }
+        }
+        
+        // Check if this is a CSS file
+        if (path.endsWith(".css")) {
+            USBSerial.printf("Serving CSS file: %s\n", path.c_str());
+            
+            // Remove leading slash for SPIFFS path
+            if (path.startsWith("/")) {
+                path = path.substring(1);
+            }
+            
+            String fullPath = "/web/" + path;
+            USBSerial.printf("Full path: %s\n", fullPath.c_str());
+            
+            if (SPIFFS.exists(fullPath)) {
+                USBSerial.printf("File found, serving with proper MIME type\n");
+                request->send(SPIFFS, fullPath, "text/css");
+                return;
+            } else {
+                USBSerial.printf("File not found: %s\n", fullPath.c_str());
+                request->send(404, "text/plain", "File Not Found");
+                return;
+            }
+        }
+        
+        // Let the default handler take care of other file types
+        request->next();
+    });
+    
     // API endpoints
     
     // LED Configuration
