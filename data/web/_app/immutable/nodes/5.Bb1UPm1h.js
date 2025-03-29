@@ -1,0 +1,1 @@
+import{t as s,b as e}from"../chunks/D-IXx3qc.js";import"../chunks/Tvy-MuRD.js";var r=s('<div class="page-container svelte-k0sgu8"><h1 class="svelte-k0sgu8">Macros Configuration</h1> <p class="svelte-k0sgu8">This page will allow you to configure macros for your macropad.</p></div>');function i(o){var a=r();e(o,a)}export{i as component};
