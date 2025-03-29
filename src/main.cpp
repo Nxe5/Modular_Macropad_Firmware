@@ -6,6 +6,7 @@
 
 #include "FS.h"
 #include "SPIFFS.h"
+#include <LittleFS.h>
 #include "ArduinoJson.h"
 
 // Modules
@@ -29,6 +30,244 @@
 
 // Forward declarations for Display functions
 extern void updateDisplay();
+
+// SPIFFS Diagnostics functions for troubleshooting
+// Global state for diagnostics
+bool diagnosticsEnabled = false;
+unsigned long lastDiagnosticTime = 0;
+uint8_t currentTest = 0;
+bool testCompleted = false;
+
+// Check available storage space in SPIFFS
+void checkStorage() {
+    size_t totalBytes = SPIFFS.totalBytes();
+    size_t usedBytes = SPIFFS.usedBytes();
+    size_t freeBytes = totalBytes - usedBytes;
+    
+    USBSerial.printf("SPIFFS: %u total bytes, %u used bytes, %u free bytes\n", 
+                    totalBytes, usedBytes, freeBytes);
+    USBSerial.printf("Storage usage: %.1f%%\n", (float)usedBytes * 100 / totalBytes);
+    
+    if (freeBytes < 50000) {  // Warn if less than 50KB free
+        USBSerial.println("WARNING: Low storage space on SPIFFS!");
+    }
+}
+
+// Test if path length is an issue
+void testPathLength() {
+    USBSerial.println("Testing path length limitations...");
+    
+    // Test with short path
+    File shortPath = SPIFFS.open("/test_short.txt", "w");
+    if (!shortPath) {
+        USBSerial.println("Failed to create short path file");
+    } else {
+        shortPath.println("test");
+        shortPath.close();
+        USBSerial.println("Short path file created successfully");
+        SPIFFS.remove("/test_short.txt");
+    }
+    
+    // Test with path similar to the problematic ones
+    File longPath = SPIFFS.open("/web/_app/immutable/nodes/test_long.js", "w");
+    if (!longPath) {
+        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
+    } else {
+        longPath.println("test");
+        longPath.close();
+        USBSerial.println("Long path file created successfully");
+        SPIFFS.remove("/web/_app/immutable/nodes/test_long.js");
+    }
+}
+
+// Test if filename restrictions are an issue
+void testFilenames() {
+    USBSerial.println("Testing filename restrictions...");
+    
+    // Test with simple filename
+    File simpleFile = SPIFFS.open("/simple.js", "w");
+    if (!simpleFile) {
+        USBSerial.println("Failed to create simple filename");
+    } else {
+        simpleFile.close();
+        USBSerial.println("Simple filename works");
+        SPIFFS.remove("/simple.js");
+    }
+    
+    // Test with hash-based filename (similar to SvelteKit output)
+    File hashFile = SPIFFS.open("/test.DWAvjrHy.js", "w");
+    if (!hashFile) {
+        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
+    } else {
+        hashFile.close();
+        USBSerial.println("Hash-based filename works");
+        SPIFFS.remove("/test.DWAvjrHy.js");
+    }
+}
+
+// Test for fragmentation by writing and deleting files
+void testFragmentation() {
+    USBSerial.println("Testing for fragmentation issues...");
+    
+    // Create a set of small files
+    for (int i = 0; i < 10; i++) {
+        String filename = "/frag_test_" + String(i) + ".txt";
+        File f = SPIFFS.open(filename, "w");
+        if (f) {
+            // Write 1KB of data
+            for (int j = 0; j < 20; j++) {
+                f.println("This is test data for fragmentation testing. Line " + String(j));
+            }
+            f.close();
+        } else {
+            USBSerial.println("Failed to create test file - possible FRAGMENTATION ISSUE");
+            break;
+        }
+    }
+    
+    // Try to create one larger file (50KB)
+    File largeFile = SPIFFS.open("/large_test.bin", "w");
+    if (largeFile) {
+        char buffer[1024];
+        memset(buffer, 'A', sizeof(buffer));
+        
+        bool writeSuccess = true;
+        for (int i = 0; i < 50; i++) {
+            if (largeFile.write((uint8_t*)buffer, sizeof(buffer)) != sizeof(buffer)) {
+                USBSerial.println("Failed to write large file block - FRAGMENTATION ISSUE CONFIRMED");
+                writeSuccess = false;
+                break;
+            }
+        }
+        
+        largeFile.close();
+        
+        if (writeSuccess) {
+            USBSerial.println("Successfully wrote large file - fragmentation not detected");
+        }
+        
+        SPIFFS.remove("/large_test.bin");
+    } else {
+        USBSerial.println("Failed to create large test file - possible FRAGMENTATION ISSUE");
+    }
+    
+    // Clean up test files
+    for (int i = 0; i < 10; i++) {
+        String filename = "/frag_test_" + String(i) + ".txt";
+        SPIFFS.remove(filename);
+    }
+}
+
+// Test LittleFS as a potential alternative to SPIFFS
+void testLittleFS() {
+    USBSerial.println("\n--- TESTING LITTLEFS ---");
+    
+    // Try to initialize LittleFS
+    if (!LittleFS.begin(false)) {
+        USBSerial.println("LittleFS mount failed. Trying to format...");
+        
+        if (!LittleFS.begin(true)) {
+            USBSerial.println("LittleFS format failed. This filesystem is not usable.");
+            return;
+        } else {
+            USBSerial.println("LittleFS formatted successfully.");
+        }
+    } else {
+        USBSerial.println("LittleFS mounted successfully.");
+    }
+    
+    // Check storage space
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t usedBytes = LittleFS.usedBytes();
+    USBSerial.printf("LittleFS: %u total bytes, %u used bytes, %u free bytes\n", 
+                   totalBytes, usedBytes, totalBytes - usedBytes);
+    
+    // Test path length limitations
+    USBSerial.println("Testing LittleFS path length limitations...");
+    
+    // Test with long path (problematic on SPIFFS)
+    File longPath = LittleFS.open("/web/_app/immutable/nodes/test_long.js", "w");
+    if (!longPath) {
+        USBSerial.println("Failed to create long path file in LittleFS");
+    } else {
+        longPath.println("test");
+        longPath.close();
+        USBSerial.println("Long path file created successfully in LittleFS");
+        
+        // Try to read the file back to verify
+        longPath = LittleFS.open("/web/_app/immutable/nodes/test_long.js", "r");
+        if (longPath) {
+            String content = longPath.readString();
+            USBSerial.println("File content: " + content);
+            longPath.close();
+            LittleFS.remove("/web/_app/immutable/nodes/test_long.js");
+        } else {
+            USBSerial.println("Failed to read back the test file");
+        }
+    }
+    
+    // Test with hash-based filename
+    File hashFile = LittleFS.open("/test.DWAvjrHy.js", "w");
+    if (!hashFile) {
+        USBSerial.println("Failed to create hash-based filename in LittleFS");
+    } else {
+        hashFile.println("test hash filename");
+        hashFile.close();
+        USBSerial.println("Hash-based filename works in LittleFS");
+        LittleFS.remove("/test.DWAvjrHy.js");
+    }
+    
+    USBSerial.println("LittleFS test complete");
+    LittleFS.end();
+}
+
+// Run diagnostics sequentially
+void runDiagnostics() {
+    if (!diagnosticsEnabled || millis() - lastDiagnosticTime < 5000) {
+        return;
+    }
+    
+    lastDiagnosticTime = millis();
+    
+    switch (currentTest) {
+        case 0:
+            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: STORAGE CHECK ---");
+            checkStorage();
+            currentTest++;
+            break;
+            
+        case 1:
+            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: PATH LENGTH TEST ---");
+            testPathLength();
+            currentTest++;
+            break;
+            
+        case 2:
+            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FILENAME TEST ---");
+            testFilenames();
+            currentTest++;
+            break;
+            
+        case 3:
+            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FRAGMENTATION TEST ---");
+            testFragmentation();
+            currentTest++;
+            break;
+            
+        case 4:
+            USBSerial.println("\n--- TESTING LITTLEFS AS ALTERNATIVE ---");
+            testLittleFS();
+            currentTest++;
+            break;
+            
+        default:
+            if (!testCompleted) {
+                USBSerial.println("\n--- SPIFFS DIAGNOSTICS COMPLETE ---");
+                testCompleted = true;
+            }
+            break;
+    }
+}
 
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
@@ -439,6 +678,11 @@ void loop() {
     // Update macro execution
     updateMacroHandler();
 
+    // Run SPIFFS diagnostics if enabled
+    if (diagnosticsEnabled) {
+        runDiagnostics();
+    }
+
     // Minimal loop - print a heartbeat every 5 seconds
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 10000) {
@@ -452,6 +696,49 @@ void loop() {
         // if (encoderHandler) {
         //     encoderHandler->diagnostics();
         // }
+    }
+    
+    // Check Serial for commands
+    if (USBSerial.available()) {
+        String command = USBSerial.readStringUntil('\n');
+        command.trim();
+        
+        if (command == "diagnostics") {
+            USBSerial.println("Starting SPIFFS diagnostics...");
+            diagnosticsEnabled = true;
+            currentTest = 0;
+            testCompleted = false;
+            lastDiagnosticTime = 0; // Start immediately
+        } else if (command == "stop") {
+            USBSerial.println("Stopping diagnostics...");
+            diagnosticsEnabled = false;
+        } else if (command == "storage") {
+            checkStorage();
+        } else if (command == "pathtest") {
+            testPathLength();
+        } else if (command == "filenametest") {
+            testFilenames();
+        } else if (command == "fragtest") {
+            testFragmentation();
+        } else if (command == "littlefs") {
+            testLittleFS();
+        } else if (command == "format") {
+            USBSerial.println("Formatting SPIFFS...");
+            SPIFFS.format();
+            USBSerial.println("SPIFFS formatted. Restarting...");
+            ESP.restart();
+        } else if (command == "help") {
+            USBSerial.println("\nAvailable commands:");
+            USBSerial.println("  diagnostics - Run all filesystem tests in sequence");
+            USBSerial.println("  stop - Stop running diagnostics");
+            USBSerial.println("  storage - Check available storage space");
+            USBSerial.println("  pathtest - Test path length limitations");
+            USBSerial.println("  filenametest - Test filename restrictions");
+            USBSerial.println("  fragtest - Test for filesystem fragmentation");
+            USBSerial.println("  littlefs - Test LittleFS as an alternative");
+            USBSerial.println("  format - Format SPIFFS filesystem (Warning: Deletes all files!)");
+            USBSerial.println("  help - Show this help message");
+        }
     }
     
     // No need to call updateKeyHandler here - the task is handling it
