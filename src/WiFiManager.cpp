@@ -1,8 +1,10 @@
 #include "WiFiManager.h"
-#include "LEDHandler.h"
+#include "ConfigManager.h"
 #include "KeyHandler.h"
-#include "DisplayHandler.h"
+#include "HIDHandler.h"
 #include "MacroHandler.h"
+#include "LEDHandler.h"
+#include "DisplayHandler.h"
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <ArduinoJson.h>
@@ -114,6 +116,45 @@ void WiFiManager::setupWebSocket() {
 }
 
 void WiFiManager::setupWebServer() {
+    // Config web server
+    _server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(LittleFS, "/web/favicon.ico", "image/x-icon");
+    });
+    
+    // Add a request logger for debugging
+    _server.onNotFound([](AsyncWebServerRequest *request) {
+        USBSerial.print("DEBUG - Request to: ");
+        USBSerial.print(request->url());
+        USBSerial.print(" (Method: ");
+        
+        switch (request->method()) {
+            case HTTP_GET: USBSerial.print("GET"); break;
+            case HTTP_POST: USBSerial.print("POST"); break;
+            case HTTP_DELETE: USBSerial.print("DELETE"); break;
+            case HTTP_PUT: USBSerial.print("PUT"); break;
+            case HTTP_PATCH: USBSerial.print("PATCH"); break;
+            case HTTP_HEAD: USBSerial.print("HEAD"); break;
+            case HTTP_OPTIONS: USBSerial.print("OPTIONS"); break;
+            default: USBSerial.print("UNKNOWN"); break;
+        }
+        
+        USBSerial.print(", Client IP: ");
+        USBSerial.print(request->client()->remoteIP().toString());
+        USBSerial.println(")");
+        
+        // Log any parameters
+        if (request->params() > 0) {
+            USBSerial.println("Request Parameters:");
+            for (int i = 0; i < request->params(); i++) {
+                const AsyncWebParameter* p = request->getParam(i);
+                USBSerial.printf("  %s: %s\n", p->name().c_str(), p->value().c_str());
+            }
+        }
+        
+        // Send 404 response
+        request->send(404, "text/plain", "Not found");
+    });
+    
     // Serve static files from LittleFS
     _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
     
@@ -1219,6 +1260,372 @@ void WiFiManager::setupWebServer() {
         request->send(404, "text/plain", "Not found");
     });
     
+    // Add CORS preflight handler for display endpoint
+    _server.on("/api/config/display", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Component actions API endpoints
+    
+    // Get component action by ID
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String componentId = request->pathArg(0);
+        USBSerial.println("Fetching action for component: " + componentId);
+        
+        if (!LittleFS.exists("/config/components.json")) {
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+            return;
+        }
+        
+        // Read components.json
+        File file = LittleFS.open("/config/components.json", "r");
+        if (!file) {
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+            return;
+        }
+        
+        String content = file.readString();
+        file.close();
+        
+        DynamicJsonDocument doc(16384);
+        DeserializationError error = deserializeJson(doc, content);
+        
+        if (error) {
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+            return;
+        }
+        
+        // Find the component with matching ID
+        JsonArray components = doc["components"].as<JsonArray>();
+        JsonObject targetComponent;
+        bool found = false;
+        
+        for (JsonObject component : components) {
+            if (component["id"].as<String>() == componentId) {
+                targetComponent = component;
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Component not found\"}");
+            return;
+        }
+        
+        // Create response with just the action data
+        DynamicJsonDocument responseDoc(1024);
+        
+        // Different response based on component type
+        if (targetComponent["type"] == "encoder") {
+            // For encoders, include clockwise, counterClockwise, and buttonPress actions
+            if (targetComponent.containsKey("clockwise")) {
+                responseDoc["clockwise"] = targetComponent["clockwise"];
+            }
+            if (targetComponent.containsKey("counterClockwise")) {
+                responseDoc["counterClockwise"] = targetComponent["counterClockwise"];
+            }
+            if (targetComponent.containsKey("buttonPress")) {
+                responseDoc["buttonPress"] = targetComponent["buttonPress"];
+            }
+        } else {
+            // For regular buttons/components, just get the action property
+            if (targetComponent.containsKey("action")) {
+                responseDoc["action"] = targetComponent["action"];
+            }
+            if (targetComponent.containsKey("type")) {
+                responseDoc["type"] = targetComponent["type"];
+            }
+        }
+        
+        String responseOutput;
+        serializeJson(responseDoc, responseOutput);
+        request->send(200, "application/json", responseOutput);
+    });
+    
+    // Update component action by ID
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing component action update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            String componentId = request->pathArg(0);
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+            
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+            
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+            
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing component action update for: " + componentId);
+                USBSerial.println("Data: " + accumulatedData);
+                
+                // Validate that we received valid JSON
+                DynamicJsonDocument actionDoc(1024);
+                DeserializationError error = deserializeJson(actionDoc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                if (!LittleFS.exists("/config/components.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Read current components configuration
+                File file = LittleFS.open("/config/components.json", "r");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String content = file.readString();
+                file.close();
+                
+                DynamicJsonDocument doc(16384);
+                DeserializationError docError = deserializeJson(doc, content);
+                
+                if (docError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Find the component with matching ID
+                JsonArray components = doc["components"].as<JsonArray>();
+                bool found = false;
+                
+                for (JsonObject component : components) {
+                    if (component["id"].as<String>() == componentId) {
+                        // Update action properties
+                        if (actionDoc.containsKey("type")) {
+                            component["type"] = actionDoc["type"];
+                        }
+                        if (actionDoc.containsKey("action")) {
+                            component["action"] = actionDoc["action"];
+                        }
+                        if (actionDoc.containsKey("params") && !actionDoc["params"].isNull()) {
+                            component["params"] = actionDoc["params"];
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Component not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Write updated configuration back to the file
+                File writeFile = LittleFS.open("/config/components.json", "w");
+                if (!writeFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String jsonOutput;
+                serializeJson(doc, jsonOutput);
+                
+                if (writeFile.print(jsonOutput) != jsonOutput.length()) {
+                    writeFile.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                writeFile.close();
+                
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Component action updated and configuration reloaded");
+                }
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Component action updated successfully\"}");
+                accumulatedData = ""; // Reset for next request
+            }
+        }
+    );
+    
+    // Update encoder component actions (special endpoint for encoders)
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/encoder-actions$", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing encoder actions update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            String componentId = request->pathArg(0);
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+            
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+            
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+            
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing encoder actions update for: " + componentId);
+                USBSerial.println("Data: " + accumulatedData);
+                
+                // Validate that we received valid JSON
+                DynamicJsonDocument actionsDoc(2048);
+                DeserializationError error = deserializeJson(actionsDoc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                if (!LittleFS.exists("/config/components.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Read current components configuration
+                File file = LittleFS.open("/config/components.json", "r");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String content = file.readString();
+                file.close();
+                
+                DynamicJsonDocument doc(16384);
+                DeserializationError docError = deserializeJson(doc, content);
+                
+                if (docError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Find the component with matching ID
+                JsonArray components = doc["components"].as<JsonArray>();
+                bool found = false;
+                
+                for (JsonObject component : components) {
+                    if (component["id"].as<String>() == componentId && component["type"] == "encoder") {
+                        // Update encoder-specific action properties
+                        if (actionsDoc.containsKey("clockwise") && !actionsDoc["clockwise"].isNull()) {
+                            component["clockwise"] = actionsDoc["clockwise"];
+                        }
+                        
+                        if (actionsDoc.containsKey("counterClockwise") && !actionsDoc["counterClockwise"].isNull()) {
+                            component["counterClockwise"] = actionsDoc["counterClockwise"];
+                        }
+                        
+                        if (actionsDoc.containsKey("buttonPress") && !actionsDoc["buttonPress"].isNull()) {
+                            component["buttonPress"] = actionsDoc["buttonPress"];
+                        }
+                        
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Encoder component not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Write updated configuration back to the file
+                File writeFile = LittleFS.open("/config/components.json", "w");
+                if (!writeFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String jsonOutput;
+                serializeJson(doc, jsonOutput);
+                
+                if (writeFile.print(jsonOutput) != jsonOutput.length()) {
+                    writeFile.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                writeFile.close();
+                
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Encoder actions updated and configuration reloaded");
+                }
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Encoder actions updated successfully\"}");
+                accumulatedData = ""; // Reset for next request
+            }
+        }
+    );
+    
+    // Add CORS preflight handlers for component action endpoints
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/encoder-actions$", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Macro API Endpoints
+    
+    // Get macros list
+    // ... existing code ...
+
     // Start server
     _server.begin();
     

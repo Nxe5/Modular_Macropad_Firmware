@@ -79,11 +79,136 @@ HIDHandler::~HIDHandler() {
     // Nothing to free
 }
 
+// New methods for multiple key support
+
+bool HIDHandler::isModifier(uint8_t key) {
+    return (key >= KEY_LEFT_CTRL && key <= KEY_RIGHT_GUI);
+}
+
+uint8_t HIDHandler::keyToModifier(uint8_t key) {
+    if (!HIDHandler::isModifier(key)) return 0;
+    
+    // Convert modifier key code to bit mask
+    switch (key) {
+        case KEY_LEFT_CTRL:   return KEY_MOD_LCTRL;
+        case KEY_LEFT_SHIFT:  return KEY_MOD_LSHIFT;
+        case KEY_LEFT_ALT:    return KEY_MOD_LALT;
+        case KEY_LEFT_GUI:    return KEY_MOD_LGUI;
+        case KEY_RIGHT_CTRL:  return KEY_MOD_RCTRL;
+        case KEY_RIGHT_SHIFT: return KEY_MOD_RSHIFT;
+        case KEY_RIGHT_ALT:   return KEY_MOD_RALT;
+        case KEY_RIGHT_GUI:   return KEY_MOD_RGUI;
+        default:              return 0;
+    }
+}
+
+bool HIDHandler::pressKey(uint8_t key) {
+    std::lock_guard<std::mutex> lock(reportMutex);
+    
+    // Check if key is already pressed
+    if (pressedKeys.find(key) != pressedKeys.end()) {
+        return true; // Key is already pressed
+    }
+    
+    // Add to pressed keys
+    pressedKeys.insert(key);
+    
+    // If it's a modifier key, update the modifier state
+    if (HIDHandler::isModifier(key)) {
+        activeModifiers |= keyToModifier(key);
+    }
+    
+    // Update the HID report
+    return updateKeyboardReportFromState();
+}
+
+bool HIDHandler::releaseKey(uint8_t key) {
+    std::lock_guard<std::mutex> lock(reportMutex);
+    
+    // Check if key is pressed
+    auto it = pressedKeys.find(key);
+    if (it == pressedKeys.end()) {
+        return true; // Key is not pressed, nothing to do
+    }
+    
+    // Remove from pressed keys
+    pressedKeys.erase(it);
+    
+    // If it's a modifier key, update the modifier state
+    if (HIDHandler::isModifier(key)) {
+        activeModifiers &= ~keyToModifier(key);
+    }
+    
+    // If no keys are pressed, send empty report
+    if (pressedKeys.empty()) {
+        return sendEmptyKeyboardReport();
+    }
+    
+    // Otherwise update the HID report with remaining keys
+    return updateKeyboardReportFromState();
+}
+
+bool HIDHandler::isKeyPressed(uint8_t key) const {
+    return pressedKeys.find(key) != pressedKeys.end();
+}
+
+bool HIDHandler::areAnyKeysPressed() const {
+    return !pressedKeys.empty();
+}
+
+void HIDHandler::clearAllKeys() {
+    std::lock_guard<std::mutex> lock(reportMutex);
+    pressedKeys.clear();
+    activeModifiers = 0;
+    sendEmptyKeyboardReport();
+}
+
+bool HIDHandler::updateKeyboardReportFromState() {
+    // Create a fresh report
+    uint8_t report[HID_KEYBOARD_REPORT_SIZE] = {0};
+    
+    // Set modifier byte
+    report[0] = activeModifiers;
+    
+    // Add regular keys (up to 6)
+    int keyIndex = 2; // First key goes in byte 2 (after modifiers and reserved byte)
+    
+    for (uint8_t key : pressedKeys) {
+        // Skip modifiers as they're handled separately
+        if (!HIDHandler::isModifier(key)) {
+            // Make sure we don't exceed the report size
+            if (keyIndex < HID_KEYBOARD_REPORT_SIZE) {
+                report[keyIndex++] = key;
+            } else {
+                // No more room in the report - this is N-key rollover limitation
+                USBSerial.println("Warning: Too many keys pressed, some ignored");
+                break;
+            }
+        }
+    }
+    
+    // Send the updated report
+    return sendKeyboardReport(report, HID_KEYBOARD_REPORT_SIZE);
+}
+
 // Fixed sendKeyboardReport with proper const casting
 bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
     if (!report || length != HID_KEYBOARD_REPORT_SIZE) {
         USBSerial.println("Invalid keyboard report");
         return false;
+    }
+    
+    // Only send report if it's different from current state
+    bool hasChanges = false;
+    for (size_t i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
+        if (keyboardState.report[i] != report[i]) {
+            hasChanges = true;
+            break;
+        }
+    }
+    
+    if (!hasChanges) {
+        return true; // No changes needed
     }
     
     // Copy report to our state
@@ -125,6 +250,43 @@ bool HIDHandler::sendKeyboardReport(const uint8_t* report, size_t length) {
 bool HIDHandler::sendEmptyKeyboardReport() {
     uint8_t emptyReport[HID_KEYBOARD_REPORT_SIZE] = {0};
     return sendKeyboardReport(emptyReport, HID_KEYBOARD_REPORT_SIZE);
+}
+
+bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
+    if (!report || length != HID_CONSUMER_REPORT_SIZE) {
+        USBSerial.println("Invalid consumer report");
+        return false;
+    }
+    
+    // Copy report to our state
+    memcpy(consumerState.report, report, HID_CONSUMER_REPORT_SIZE);
+    
+    if (!tud_mounted()) {
+        USBSerial.println("USB device not mounted");
+        return false;
+    }
+    
+    if (tud_hid_ready()) {
+        // For consumer report, we send the 16-bit usage code
+        uint16_t usage = (report[1] << 8) | report[0];
+        bool success = tud_hid_report(2, &usage, sizeof(usage));
+        
+        if (success) {
+            USBSerial.printf("Consumer report sent: %04X\n", usage);
+            return true;
+        } else {
+            USBSerial.println("Failed to send consumer report");
+            return false;
+        }
+    } else {
+        USBSerial.println("HID not ready to send consumer report");
+        return false;
+    }
+}
+
+bool HIDHandler::sendEmptyConsumerReport() {
+    uint8_t emptyReport[HID_CONSUMER_REPORT_SIZE] = {0};
+    return sendConsumerReport(emptyReport, HID_CONSUMER_REPORT_SIZE);
 }
 
 bool HIDHandler::executeMacro(const char* macroId) {
@@ -245,6 +407,12 @@ bool HIDHandler::hexReportToBinary(const std::vector<String>& hexReport, uint8_t
     return true;
 }
 
+// Initialize HID functionality
+bool HIDHandler::begin() {
+    // This is done by TinyUSB, just return true
+    return true;
+}
+
 // Example for HID handler initialization
 void initializeHIDHandler() {
     if (hidHandler != nullptr) {
@@ -272,113 +440,15 @@ void initializeHIDHandler() {
     }
 }
 
+void updateHIDHandler() {
+    if (hidHandler) {
+        hidHandler->update();
+    }
+}
+
 void cleanupHIDHandler() {
     if (hidHandler) {
         delete hidHandler;
         hidHandler = nullptr;
-    }
-}
-
-
-bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
-    // We still expect a 4-byte array from configuration, but we only use byte 2.
-    if (!report || length != 4) {
-        USBSerial.println("ERROR: Invalid consumer report");
-        return false;
-    }
-    
-    // Wait for USB to mount
-    unsigned long startTime = millis();
-    while (!tud_mounted() && (millis() - startTime < 2000)) {
-        tud_task();
-        delay(10);
-    }
-    if (!tud_mounted()) {
-        USBSerial.println("ERROR: USB not mounted");
-        return false;
-    }
-    
-    if (!tud_hid_ready()) {
-        USBSerial.println("ERROR: HID not ready");
-        return false;
-    }
-    
-    // Construct a 16-bit consumer control value.
-    uint16_t consumerCode = 0x0000;
-    if (report[2] == 0xE9) {
-        consumerCode = 0x00E9; // Volume UP
-        USBSerial.println("Preparing Volume UP Command");
-    } else if (report[2] == 0xEA) {
-        consumerCode = 0x00EA; // Volume DOWN
-        USBSerial.println("Preparing Volume DOWN Command");
-    }
-    
-    USBSerial.printf("Raw Consumer Report: %02X %02X %02X %02X\n",
-                     report[0], report[1], report[2], report[3]);
-    USBSerial.printf("Consumer Code: 0x%04X\n", consumerCode);
-    
-    bool success = false;
-    // Use Report ID 0x04 as defined in your HID descriptor.
-    for (int attempts = 0; attempts < 3; attempts++) {
-        success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&consumerCode), sizeof(consumerCode));
-        if (success) {
-            USBSerial.printf("Consumer Report Sent Successfully (Attempt %d)\n", attempts + 1);
-            break;
-        } else {
-            USBSerial.printf("Consumer Report Send Failed (Attempt %d)\n", attempts + 1);
-            delay(10);
-        }
-    }
-    return success;
-}
-
-bool HIDHandler::sendEmptyConsumerReport() {
-    uint16_t emptyCode = 0x0000;
-    
-    if (!tud_mounted()) {
-        USBSerial.println("ERROR: Cannot send empty report - USB not mounted");
-        return false;
-    }
-    
-    if (!tud_hid_ready()) {
-        USBSerial.println("ERROR: Cannot send empty report - HID not ready");
-        return false;
-    }
-    
-    // Send an empty 16-bit consumer report with Report ID 0x04.
-    bool success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&emptyCode), sizeof(emptyCode));
-    USBSerial.printf("Empty Consumer Report %s\n",
-                     success ? "SENT SUCCESSFULLY" : "FAILED");
-    return success;
-}
-
-
-
-bool HIDHandler::begin() {
-    USBSerial.println("Initializing HID Handler & Waiting for USB Stack to Initialize...");
-    
-    // More aggressive USB initialization
-    unsigned long startTime = millis();
-    while (!tud_mounted() && (millis() - startTime < 5000)) {
-        tud_task();  // Process USB events
-        delay(50);  // Longer delay between attempts
-        
-        // Print status periodically
-        if (millis() % 1000 == 0) {
-            USBSerial.println("Waiting for USB to mount...");
-        }
-    }
-    
-    if (tud_mounted()) {
-        USBSerial.println("USB device mounted successfully");
-        
-        // Additional checks
-        USBSerial.printf("HID Ready: %s\n", tud_hid_ready() ? "YES" : "NO");
-        USBSerial.printf("CDC Connected: %s\n", tud_cdc_connected() ? "YES" : "NO");
-        
-        return true;
-    } else {
-        USBSerial.println("ERROR: USB device not mounted after timeout");
-        return false;
     }
 }

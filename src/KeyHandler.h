@@ -7,6 +7,7 @@
 #include <map>
 #include <vector>
 #include "ConfigManager.h"
+#include "HIDHandler.h"  // Include for key definitions
 
 // Constants
 #define MAX_KEYS 25 // Maximum number of keys

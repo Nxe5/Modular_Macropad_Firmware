@@ -315,12 +315,47 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
                 USBSerial.println();
                 
                 if (hidHandler) {
-                    bool sent = hidHandler->sendKeyboardReport(config.hidReport);
-                    USBSerial.printf("HID report sent: %s\n", sent ? "SUCCESS" : "FAILED");
+                    // Process modifier keys (byte 0)
+                    if (config.hidReport[0] != 0) {
+                        for (uint8_t i = 0; i < 8; i++) {
+                            if (config.hidReport[0] & (1 << i)) {
+                                // Convert bit position to modifier key code (0xE0-0xE7)
+                                uint8_t modifierKey = KEY_LEFT_CTRL + i;
+                                hidHandler->pressKey(modifierKey);
+                            }
+                        }
+                    }
+                    
+                    // Process regular keys (bytes 2-7)
+                    for (int i = 2; i < 8; i++) {
+                        if (config.hidReport[i] != 0) {
+                            hidHandler->pressKey(config.hidReport[i]);
+                        }
+                    }
+                    
+                    USBSerial.println("HID key press processed");
                 }
             } else if (action == KEY_RELEASE) {
                 if (hidHandler) {
-                    hidHandler->sendEmptyKeyboardReport();
+                    // Release modifier keys
+                    if (config.hidReport[0] != 0) {
+                        for (uint8_t i = 0; i < 8; i++) {
+                            if (config.hidReport[0] & (1 << i)) {
+                                // Convert bit position to modifier key code (0xE0-0xE7)
+                                uint8_t modifierKey = KEY_LEFT_CTRL + i;
+                                hidHandler->releaseKey(modifierKey);
+                            }
+                        }
+                    }
+                    
+                    // Release regular keys
+                    for (int i = 2; i < 8; i++) {
+                        if (config.hidReport[i] != 0) {
+                            hidHandler->releaseKey(config.hidReport[i]);
+                        }
+                    }
+                    
+                    USBSerial.println("HID key release processed");
                 }
             }
             break;
