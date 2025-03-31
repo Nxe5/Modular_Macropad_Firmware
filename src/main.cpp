@@ -28,6 +28,12 @@
 
 #include "WiFiManager.h"
 
+// Initialize USB devices
+USBHIDKeyboard Keyboard;
+USBHIDConsumerControl ConsumerControl;
+USBHIDMouse Mouse;  // Optional if you need mouse controls
+USBCDC USBSerial;
+
 // Forward declarations for Display functions
 extern void updateDisplay();
 
@@ -268,11 +274,6 @@ void runDiagnostics() {
             break;
     }
 }
-
-USBHIDKeyboard Keyboard;
-USBHIDConsumerControl ConsumerControl;
-USBHIDMouse Mouse;  // Optional if you need mouse controls
-USBCDC USBSerial;
 
 // Flag to indicate if USB server should be initialized
 // IMPORTANT: Set this to false to disable USB server completely

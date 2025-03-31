@@ -1,1 +1,0 @@
-import{t as e,b as a}from"../chunks/D-IXx3qc.js";import"../chunks/Tvy-MuRD.js";var s=e('<div class="page-container svelte-k0sgu8"><h1 class="svelte-k0sgu8">Welcome to Ocho Labs Macropad Configuration Tool</h1> <p class="svelte-k0sgu8">Select an option from the navigation menu to get started.</p></div>');function i(o){var t=s();a(o,t)}export{i as component};
