@@ -1,7 +1,7 @@
 #include "MacroHandler.h"
 #include <Arduino.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "HIDHandler.h"
 #include <USB.h>
@@ -21,22 +21,23 @@ MacroHandler::MacroHandler() {
 }
 
 bool MacroHandler::begin() {
-    if (!SPIFFS.begin(true)) {
-        USBSerial.println("Failed to initialize SPIFFS for macro storage");
-        return false;
+    // LittleFS should already be initialized in main.cpp
+    if (!LittleFS.exists("/macros")) {
+        USBSerial.println("Creating macros directory");
+        if (!LittleFS.mkdir("/macros")) {
+            USBSerial.println("Failed to create macros directory");
+            return false;
+        }
     }
-    
-    // Create the macro directory if it doesn't exist
-    ensureMacroDirectoryExists();
     
     // Load all existing macros
     return loadMacros();
 }
 
 void MacroHandler::ensureMacroDirectoryExists() {
-    if (!SPIFFS.exists("/macros")) {
+    if (!LittleFS.exists("/macros")) {
         USBSerial.println("Creating macros directory");
-        SPIFFS.mkdir("/macros");
+        LittleFS.mkdir("/macros");
     }
 }
 
@@ -49,7 +50,7 @@ bool MacroHandler::loadMacros() {
     ensureMacroDirectoryExists();
     
     // Scan the macros directory directly without using index.json
-    File root = SPIFFS.open("/macros");
+    File root = LittleFS.open("/macros");
     if (!root) {
         USBSerial.println("Failed to open macros directory");
         return false;
@@ -261,7 +262,7 @@ bool MacroHandler::saveMacro(const Macro& macro) {
     
     // Save to file
     String macroPath = getMacroFilePath(macro.id);
-    File macroFile = SPIFFS.open(macroPath, FILE_WRITE);
+    File macroFile = LittleFS.open(macroPath, FILE_WRITE);
     if (!macroFile) {
         USBSerial.printf("Failed to open macro file for writing: %s\n", macroPath.c_str());
         return false;
@@ -791,8 +792,8 @@ bool MacroHandler::deleteMacro(const String& macroId) {
     
     // Delete the file
     String macroPath = getMacroFilePath(macroId);
-    if (SPIFFS.exists(macroPath)) {
-        if (!SPIFFS.remove(macroPath)) {
+    if (LittleFS.exists(macroPath)) {
+        if (!LittleFS.remove(macroPath)) {
             USBSerial.printf("Failed to delete macro file: %s\n", macroPath.c_str());
             return false;
         }
@@ -857,7 +858,7 @@ std::vector<String> MacroHandler::getAvailableMacros() {
     ensureMacroDirectoryExists();
     
     // Scan the directory directly
-    File root = SPIFFS.open("/macros");
+    File root = LittleFS.open("/macros");
     if (!root || !root.isDirectory()) {
         USBSerial.println("Failed to open macros directory in getAvailableMacros");
         return result;

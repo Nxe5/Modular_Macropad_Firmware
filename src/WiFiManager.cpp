@@ -7,10 +7,10 @@
 #include <AsyncTCP.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
-#include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ESPmDNS.h>
 #include "config.h"
+#include <USBCDC.h>
 
 // Forward declarations
 String serializedJson(const String& jsonStr);
@@ -35,7 +35,7 @@ const uint32_t WiFiManager::STATUS_BROADCAST_INTERVAL = 5000; // Increased from 
 const uint32_t WiFiManager::CONNECT_TIMEOUT = 30000; // 30 seconds
 
 void WiFiManager::begin() {
-    // Load WiFi config from SPIFFS
+    // Load WiFi config from LittleFS
     loadWiFiConfig();
     
     // Setup WiFi
@@ -114,16 +114,16 @@ void WiFiManager::setupWebSocket() {
 }
 
 void WiFiManager::setupWebServer() {
-    // Serve static files from SPIFFS
-    _server.serveStatic("/", SPIFFS, "/web/").setDefaultFile("index.html");
+    // Serve static files from LittleFS
+    _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
     
     // Serve CSS file
     _server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/web/style.css", "text/css");
+        request->send(LittleFS, "/web/style.css", "text/css");
     });
     
     // Serve assets files
-    _server.serveStatic("/assets/", SPIFFS, "/web/assets/");
+    _server.serveStatic("/assets/", LittleFS, "/web/assets/");
     
     // API endpoints
     
@@ -224,7 +224,7 @@ void WiFiManager::setupWebServer() {
     
     // Get components.json config file
     _server.on("/api/config/components", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/components.json", "application/json");
+        request->send(LittleFS, "/config/components.json", "application/json");
     });
     
     // Update components.json config file
@@ -273,14 +273,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/components.json")) {
+                if (!LittleFS.exists("/config/components.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/components.json", "w");
+                File file = LittleFS.open("/config/components.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -305,7 +305,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/components.json", "r");
+                File verifyFile = LittleFS.open("/config/components.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -357,7 +357,7 @@ void WiFiManager::setupWebServer() {
     
     // Get actions.json config file
     _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/actions.json", "application/json");
+        request->send(LittleFS, "/config/actions.json", "application/json");
     });
     
     // Update actions.json config file
@@ -415,14 +415,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/actions.json")) {
+                if (!LittleFS.exists("/config/actions.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Actions config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/actions.json", "w");
+                File file = LittleFS.open("/config/actions.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open actions config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -448,7 +448,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/actions.json", "r");
+                File verifyFile = LittleFS.open("/config/actions.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify actions config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -500,7 +500,7 @@ void WiFiManager::setupWebServer() {
     
     // Get reports.json config file
     _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/reports.json", "application/json");
+        request->send(LittleFS, "/config/reports.json", "application/json");
     });
     
     // Update reports.json config file
@@ -549,14 +549,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/reports.json")) {
+                if (!LittleFS.exists("/config/reports.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/reports.json", "w");
+                File file = LittleFS.open("/config/reports.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -581,7 +581,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/reports.json", "r");
+                File verifyFile = LittleFS.open("/config/reports.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -633,7 +633,7 @@ void WiFiManager::setupWebServer() {
     
     // Get LEDs.json config file
     _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/LEDs.json", "application/json");
+        request->send(LittleFS, "/config/LEDs.json", "application/json");
     });
     
     // Update LEDs.json config file
@@ -682,14 +682,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/LEDs.json")) {
+                if (!LittleFS.exists("/config/LEDs.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/LEDs.json", "w");
+                File file = LittleFS.open("/config/LEDs.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -714,7 +714,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/LEDs.json", "r");
+                File verifyFile = LittleFS.open("/config/LEDs.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -767,7 +767,7 @@ void WiFiManager::setupWebServer() {
     
     // Get info.json config file
     _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/info.json", "application/json");
+        request->send(LittleFS, "/config/info.json", "application/json");
     });
     
     // Update info.json config file
@@ -816,14 +816,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/info.json")) {
+                if (!LittleFS.exists("/config/info.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/info.json", "w");
+                File file = LittleFS.open("/config/info.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -848,7 +848,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/info.json", "r");
+                File verifyFile = LittleFS.open("/config/info.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -1519,8 +1519,8 @@ void WiFiManager::broadcastStatus() {
 }
 
 void WiFiManager::loadWiFiConfig() {
-    if (SPIFFS.exists("/config/wifi.json")) {
-        File file = SPIFFS.open("/config/wifi.json", "r");
+    if (LittleFS.exists("/config/wifi.json")) {
+        File file = LittleFS.open("/config/wifi.json", "r");
         if (file) {
             String json = file.readString();
             file.close();
@@ -1551,7 +1551,7 @@ void WiFiManager::saveWiFiConfig() {
     String json;
     serializeJson(doc, json);
     
-    File file = SPIFFS.open("/config/wifi.json", "w");
+    File file = LittleFS.open("/config/wifi.json", "w");
     if (file) {
         file.print(json);
         file.close();
@@ -1570,9 +1570,9 @@ void WiFiManager::resetToDefaults() {
     
     // Reset other configs as needed
     // e.g., copy default configs to active configs
-    if (SPIFFS.exists("/defaults/LEDs.json")) {
-        File srcFile = SPIFFS.open("/defaults/LEDs.json", "r");
-        File destFile = SPIFFS.open("/config/LEDs.json", "w");
+    if (LittleFS.exists("/defaults/LEDs.json")) {
+        File srcFile = LittleFS.open("/defaults/LEDs.json", "r");
+        File destFile = LittleFS.open("/config/LEDs.json", "w");
         
         if (srcFile && destFile) {
             uint8_t buffer[512];
@@ -1613,11 +1613,11 @@ String serializedJson(const String& jsonStr) {
 // Helper function to lookup key names from reports
 String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) {
     // Load reports.json
-    if (!SPIFFS.exists("/config/reports.json")) {
+    if (!LittleFS.exists("/config/reports.json")) {
         return "Unknown";
     }
     
-    File file = SPIFFS.open("/config/reports.json", "r");
+    File file = LittleFS.open("/config/reports.json", "r");
     if (!file) {
         return "Error";
     }

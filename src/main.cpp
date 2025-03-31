@@ -5,9 +5,25 @@
 #include "lwip/inet.h"
 
 #include "FS.h"
-#include "SPIFFS.h"
+// #include "SPIFFS.h" - Replaced with LittleFS
 #include <LittleFS.h>
 #include "ArduinoJson.h"
+
+// Directly include ESP32 LittleFS implementation headers for more control
+#include "esp_littlefs.h"
+
+// Forward declarations for internal LittleFS functions if not already defined
+extern "C" {
+    esp_err_t esp_littlefs_format(const char* partition_label);
+    
+    typedef struct {
+        const char* partition_label;
+        size_t partition_size;
+        bool dont_mount;
+    } esp_littlefs_format_opts_t;
+    
+    esp_err_t esp_littlefs_format_opts(const esp_littlefs_format_opts_t* opts);
+}
 
 // Modules
 #include "ModuleSetup.h"
@@ -28,6 +44,8 @@
 
 #include "WiFiManager.h"
 
+#include "FileSystemUtils.h"
+
 // Initialize USB devices
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
@@ -37,25 +55,25 @@ USBCDC USBSerial;
 // Forward declarations for Display functions
 extern void updateDisplay();
 
-// SPIFFS Diagnostics functions for troubleshooting
+// LittleFS Diagnostics functions for troubleshooting
 // Global state for diagnostics
 bool diagnosticsEnabled = false;
 unsigned long lastDiagnosticTime = 0;
 uint8_t currentTest = 0;
 bool testCompleted = false;
 
-// Check available storage space in SPIFFS
+// Enhanced filesystem diagnostics with our FileSystemUtils
 void checkStorage() {
-    size_t totalBytes = SPIFFS.totalBytes();
-    size_t usedBytes = SPIFFS.usedBytes();
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t usedBytes = LittleFS.usedBytes();
     size_t freeBytes = totalBytes - usedBytes;
     
-    USBSerial.printf("SPIFFS: %u total bytes, %u used bytes, %u free bytes\n", 
+    USBSerial.printf("LittleFS: %u total bytes, %u used bytes, %u free bytes\n", 
                     totalBytes, usedBytes, freeBytes);
     USBSerial.printf("Storage usage: %.1f%%\n", (float)usedBytes * 100 / totalBytes);
     
     if (freeBytes < 50000) {  // Warn if less than 50KB free
-        USBSerial.println("WARNING: Low storage space on SPIFFS!");
+        USBSerial.println("WARNING: Low storage space on LittleFS!");
     }
 }
 
@@ -64,25 +82,19 @@ void testPathLength() {
     USBSerial.println("Testing path length limitations...");
     
     // Test with short path
-    File shortPath = SPIFFS.open("/test_short.txt", "w");
-    if (!shortPath) {
-        USBSerial.println("Failed to create short path file");
-    } else {
-        shortPath.println("test");
-        shortPath.close();
+    if (FileSystemUtils::writeFile("/test_short.txt", "test")) {
         USBSerial.println("Short path file created successfully");
-        SPIFFS.remove("/test_short.txt");
+        LittleFS.remove("/test_short.txt");
+    } else {
+        USBSerial.println("Failed to create short path file");
     }
     
     // Test with path similar to the problematic ones
-    File longPath = SPIFFS.open("/web/_app/immutable/nodes/test_long.js", "w");
-    if (!longPath) {
-        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
-    } else {
-        longPath.println("test");
-        longPath.close();
+    if (FileSystemUtils::writeFile("/web/_app/immutable/nodes/test_long.js", "test")) {
         USBSerial.println("Long path file created successfully");
-        SPIFFS.remove("/web/_app/immutable/nodes/test_long.js");
+        FileSystemUtils::deleteFileAndDirs("/web/_app/immutable/nodes/test_long.js");
+    } else {
+        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
     }
 }
 
@@ -91,23 +103,19 @@ void testFilenames() {
     USBSerial.println("Testing filename restrictions...");
     
     // Test with simple filename
-    File simpleFile = SPIFFS.open("/simple.js", "w");
-    if (!simpleFile) {
-        USBSerial.println("Failed to create simple filename");
-    } else {
-        simpleFile.close();
+    if (FileSystemUtils::writeFile("/simple.js", "test")) {
         USBSerial.println("Simple filename works");
-        SPIFFS.remove("/simple.js");
+        FileSystemUtils::deleteFileAndDirs("/simple.js");
+    } else {
+        USBSerial.println("Failed to create simple filename");
     }
     
     // Test with hash-based filename (similar to SvelteKit output)
-    File hashFile = SPIFFS.open("/test.DWAvjrHy.js", "w");
-    if (!hashFile) {
-        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
-    } else {
-        hashFile.close();
+    if (FileSystemUtils::writeFile("/test.DWAvjrHy.js", "test")) {
         USBSerial.println("Hash-based filename works");
-        SPIFFS.remove("/test.DWAvjrHy.js");
+        FileSystemUtils::deleteFileAndDirs("/test.DWAvjrHy.js");
+    } else {
+        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
     }
 }
 
@@ -118,113 +126,26 @@ void testFragmentation() {
     // Create a set of small files
     for (int i = 0; i < 10; i++) {
         String filename = "/frag_test_" + String(i) + ".txt";
-        File f = SPIFFS.open(filename, "w");
-        if (f) {
-            // Write 1KB of data
-            for (int j = 0; j < 20; j++) {
-                f.println("This is test data for fragmentation testing. Line " + String(j));
-            }
-            f.close();
-        } else {
+        String content = "";
+        // Write 1KB of data
+        for (int j = 0; j < 20; j++) {
+            content += "This is test data for fragmentation testing. Line " + String(j) + "\n";
+        }
+        
+        if (!FileSystemUtils::writeFile(filename.c_str(), content)) {
             USBSerial.println("Failed to create test file - possible FRAGMENTATION ISSUE");
             break;
         }
     }
     
-    // Try to create one larger file (50KB)
-    File largeFile = SPIFFS.open("/large_test.bin", "w");
-    if (largeFile) {
-        char buffer[1024];
-        memset(buffer, 'A', sizeof(buffer));
-        
-        bool writeSuccess = true;
-        for (int i = 0; i < 50; i++) {
-            if (largeFile.write((uint8_t*)buffer, sizeof(buffer)) != sizeof(buffer)) {
-                USBSerial.println("Failed to write large file block - FRAGMENTATION ISSUE CONFIRMED");
-                writeSuccess = false;
-                break;
-            }
-        }
-        
-        largeFile.close();
-        
-        if (writeSuccess) {
-            USBSerial.println("Successfully wrote large file - fragmentation not detected");
-        }
-        
-        SPIFFS.remove("/large_test.bin");
-    } else {
-        USBSerial.println("Failed to create large test file - possible FRAGMENTATION ISSUE");
-    }
+    // Try a more comprehensive performance test
+    FileSystemUtils::testPerformance("/large_test.bin", 1024, 50);
     
     // Clean up test files
     for (int i = 0; i < 10; i++) {
         String filename = "/frag_test_" + String(i) + ".txt";
-        SPIFFS.remove(filename);
+        FileSystemUtils::deleteFileAndDirs(filename.c_str());
     }
-}
-
-// Test LittleFS as a potential alternative to SPIFFS
-void testLittleFS() {
-    USBSerial.println("\n--- TESTING LITTLEFS ---");
-    
-    // Try to initialize LittleFS
-    if (!LittleFS.begin(false)) {
-        USBSerial.println("LittleFS mount failed. Trying to format...");
-        
-        if (!LittleFS.begin(true)) {
-            USBSerial.println("LittleFS format failed. This filesystem is not usable.");
-            return;
-        } else {
-            USBSerial.println("LittleFS formatted successfully.");
-        }
-    } else {
-        USBSerial.println("LittleFS mounted successfully.");
-    }
-    
-    // Check storage space
-    size_t totalBytes = LittleFS.totalBytes();
-    size_t usedBytes = LittleFS.usedBytes();
-    USBSerial.printf("LittleFS: %u total bytes, %u used bytes, %u free bytes\n", 
-                   totalBytes, usedBytes, totalBytes - usedBytes);
-    
-    // Test path length limitations
-    USBSerial.println("Testing LittleFS path length limitations...");
-    
-    // Test with long path (problematic on SPIFFS)
-    File longPath = LittleFS.open("/web/_app/immutable/nodes/test_long.js", "w");
-    if (!longPath) {
-        USBSerial.println("Failed to create long path file in LittleFS");
-    } else {
-        longPath.println("test");
-        longPath.close();
-        USBSerial.println("Long path file created successfully in LittleFS");
-        
-        // Try to read the file back to verify
-        longPath = LittleFS.open("/web/_app/immutable/nodes/test_long.js", "r");
-        if (longPath) {
-            String content = longPath.readString();
-            USBSerial.println("File content: " + content);
-            longPath.close();
-            LittleFS.remove("/web/_app/immutable/nodes/test_long.js");
-        } else {
-            USBSerial.println("Failed to read back the test file");
-        }
-    }
-    
-    // Test with hash-based filename
-    File hashFile = LittleFS.open("/test.DWAvjrHy.js", "w");
-    if (!hashFile) {
-        USBSerial.println("Failed to create hash-based filename in LittleFS");
-    } else {
-        hashFile.println("test hash filename");
-        hashFile.close();
-        USBSerial.println("Hash-based filename works in LittleFS");
-        LittleFS.remove("/test.DWAvjrHy.js");
-    }
-    
-    USBSerial.println("LittleFS test complete");
-    LittleFS.end();
 }
 
 // Run diagnostics sequentially
@@ -237,38 +158,32 @@ void runDiagnostics() {
     
     switch (currentTest) {
         case 0:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: STORAGE CHECK ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: STORAGE CHECK ---");
             checkStorage();
             currentTest++;
             break;
             
         case 1:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: PATH LENGTH TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: PATH LENGTH TEST ---");
             testPathLength();
             currentTest++;
             break;
             
         case 2:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FILENAME TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: FILENAME TEST ---");
             testFilenames();
             currentTest++;
             break;
             
         case 3:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FRAGMENTATION TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: FRAGMENTATION TEST ---");
             testFragmentation();
-            currentTest++;
-            break;
-            
-        case 4:
-            USBSerial.println("\n--- TESTING LITTLEFS AS ALTERNATIVE ---");
-            testLittleFS();
             currentTest++;
             break;
             
         default:
             if (!testCompleted) {
-                USBSerial.println("\n--- SPIFFS DIAGNOSTICS COMPLETE ---");
+                USBSerial.println("\n--- LITTLEFS DIAGNOSTICS COMPLETE ---");
                 testCompleted = true;
             }
             break;
@@ -545,8 +460,99 @@ void usbServerTask(void *pvParameters) {
     USBSerial.println("Starting USB Server initialization task");
 }
 
+// Create default configuration files if they don't exist using improved approach
+void createDefaultConfigFiles() {
+    USBSerial.println("Creating default config files...");
+    
+    // Default components.json
+    String defaultComponents = R"({
+        "components": [
+            {
+                "id": "button-0",
+                "type": "button",
+                "size": { "rows": 1, "columns": 1 },
+                "start_location": { "row": 0, "column": 0 }
+            }
+        ]
+    })";
+    
+    // Default actions.json
+    String defaultActions = R"({
+        "actions": {
+            "layer-config": {
+                "button-0": {
+                    "type": "hid",
+                    "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+                }
+            }
+        }
+    })";
+    
+    // Default reports.json
+    String defaultReports = R"({
+        "reports": {
+            "hid": {
+                "0x00_0x00_0x04_0x00_0x00_0x00_0x00_0x00": "a"
+            },
+            "consumer": {}
+        }
+    })";
+    
+    // Default info.json
+    String defaultInfo = R"({
+        "name": "Modular Macropad",
+        "version": "1.0.0",
+        "author": "User",
+        "description": "Default configuration",
+        "module-size": "full",
+        "gridSize": { "rows": 3, "columns": 4 },
+        "defaults": {},
+        "settings": {},
+        "supportedComponentTypes": ["button", "encoder", "display"]
+    })";
+
+    // Create config files using our new utility class with automatic directory creation
+    bool success = true;
+    
+    if (!FileSystemUtils::fileExists("/config/components.json")) {
+        success &= FileSystemUtils::writeFile("/config/components.json", defaultComponents);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/actions.json")) {
+        success &= FileSystemUtils::writeFile("/config/actions.json", defaultActions);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/reports.json")) {
+        success &= FileSystemUtils::writeFile("/config/reports.json", defaultReports);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/info.json")) {
+        success &= FileSystemUtils::writeFile("/config/info.json", defaultInfo);
+    }
+    
+    // Also create compatibility files in /data/config
+    if (!FileSystemUtils::fileExists("/data/config/reports.json")) {
+        success &= FileSystemUtils::writeFile("/data/config/reports.json", defaultReports);
+    }
+    
+    if (!FileSystemUtils::fileExists("/data/config/actions.json")) {
+        success &= FileSystemUtils::writeFile("/data/config/actions.json", defaultActions);
+    }
+    
+    if (success) {
+        USBSerial.println("All default config files created successfully");
+    } else {
+        USBSerial.println("Some config files could not be created");
+    }
+}
+
+// List all files in a directory recursively using the new utility class
+void listDir(const char * dirname, uint8_t levels) {
+    FileSystemUtils::listDir(dirname, levels);
+}
+
 void setup() {
-    // Initialize USB with both HID and CDC
+    // Initialize USB in Serial mode
     USB.begin();
     USBSerial.begin();
 
@@ -560,38 +566,25 @@ void setup() {
     ConsumerControl.begin();
     USBSerial.println("HID Consumer Control initialized");
     
-    // Mount SPIFFS for configuration files
-    if (!SPIFFS.begin(true)) {
-        USBSerial.println("Failed to mount SPIFFS");
+    // Initialize LittleFS with improved approach
+    USBSerial.println("Initializing filesystem...");
+    if (FileSystemUtils::begin(true)) {
+        USBSerial.println("LittleFS filesystem is operational");
+        
+        // Create base directories
+        FileSystemUtils::createDirPath("/config");
+        FileSystemUtils::createDirPath("/data/config");
+        FileSystemUtils::createDirPath("/web");
+        FileSystemUtils::createDirPath("/macros");
+        
+        // Create default configuration files
+        createDefaultConfigFiles();
+        
+        // List all files in the filesystem
+        USBSerial.println("Filesystem contents:");
+        FileSystemUtils::listDir("/", 2);
     } else {
-        USBSerial.println("SPIFFS mounted successfully");
-        
-        // Create config directory if it doesn't exist
-        if (!SPIFFS.exists("/config")) {
-            if (SPIFFS.mkdir("/config")) {
-                USBSerial.println("Created /config directory");
-            } else {
-                USBSerial.println("Failed to create /config directory");
-            }
-        }
-        
-        // Create web directory if it doesn't exist
-        if (!SPIFFS.exists("/web")) {
-            if (SPIFFS.mkdir("/web")) {
-                USBSerial.println("Created /web directory");
-            } else {
-                USBSerial.println("Failed to create /web directory");
-            }
-        }
-        
-        // Create macros directory if it doesn't exist
-        if (!SPIFFS.exists("/macros")) {
-            if (SPIFFS.mkdir("/macros")) {
-                USBSerial.println("Created /macros directory");
-            } else {
-                USBSerial.println("Failed to create /macros directory");
-            }
-        }
+        USBSerial.println("WARNING: Continuing without functional filesystem");
     }
     
     // Initialize display
@@ -679,7 +672,7 @@ void loop() {
     // Update macro execution
     updateMacroHandler();
 
-    // Run SPIFFS diagnostics if enabled
+    // Run LittleFS diagnostics if enabled
     if (diagnosticsEnabled) {
         runDiagnostics();
     }
@@ -705,7 +698,7 @@ void loop() {
         command.trim();
         
         if (command == "diagnostics") {
-            USBSerial.println("Starting SPIFFS diagnostics...");
+            USBSerial.println("Starting LittleFS diagnostics...");
             diagnosticsEnabled = true;
             currentTest = 0;
             testCompleted = false;
@@ -721,12 +714,10 @@ void loop() {
             testFilenames();
         } else if (command == "fragtest") {
             testFragmentation();
-        } else if (command == "littlefs") {
-            testLittleFS();
         } else if (command == "format") {
-            USBSerial.println("Formatting SPIFFS...");
-            SPIFFS.format();
-            USBSerial.println("SPIFFS formatted. Restarting...");
+            USBSerial.println("Formatting LittleFS...");
+            LittleFS.format();
+            USBSerial.println("LittleFS formatted. Restarting...");
             ESP.restart();
         } else if (command == "help") {
             USBSerial.println("\nAvailable commands:");
@@ -736,8 +727,7 @@ void loop() {
             USBSerial.println("  pathtest - Test path length limitations");
             USBSerial.println("  filenametest - Test filename restrictions");
             USBSerial.println("  fragtest - Test for filesystem fragmentation");
-            USBSerial.println("  littlefs - Test LittleFS as an alternative");
-            USBSerial.println("  format - Format SPIFFS filesystem (Warning: Deletes all files!)");
+            USBSerial.println("  format - Format LittleFS filesystem (Warning: Deletes all files!)");
             USBSerial.println("  help - Show this help message");
         }
     }
@@ -747,3 +737,4 @@ void loop() {
     // Give other tasks time to run
     delay(20); // Increased delay to reduce update frequency
 }
+

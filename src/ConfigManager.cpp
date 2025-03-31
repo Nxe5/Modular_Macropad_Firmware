@@ -1,11 +1,11 @@
 #include "ConfigManager.h"
 
 String ConfigManager::readFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
+    if (!LittleFS.exists(filePath)) {
         Serial.printf("File not found: %s\n", filePath);
         return "";
     }
-    File file = SPIFFS.open(filePath, "r");
+    File file = LittleFS.open(filePath, "r");
     if (!file) {
         Serial.printf("Failed to open file: %s\n", filePath);
         return "";

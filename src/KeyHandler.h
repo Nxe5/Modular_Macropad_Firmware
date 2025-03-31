@@ -92,7 +92,7 @@ private:
     // Layer management
     String currentLayer = "default";
     std::map<String, std::map<String, KeyConfig>> layerConfigs; // Layer -> ComponentID -> Config
-    void saveCurrentLayer();
+    bool saveCurrentLayer();
     bool loadCurrentLayer();
     
     // Direct position mapping

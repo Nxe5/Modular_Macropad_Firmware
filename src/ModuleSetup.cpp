@@ -1,48 +1,54 @@
 // ModuleSetup.cpp
 #include "ModuleSetup.h"
 #include <ArduinoJson.h>
-#include "FS.h"
-#include "SPIFFS.h"
+#include <USBCDC.h>
+#include "LittleFS.h"
+#include <vector>
+#include "FileSystemUtils.h"
 
 ModuleCapabilities currentModule;
 ModuleInfo moduleInfo;
+extern USBCDC USBSerial;
 
-// Function to read a JSON file from SPIFFS
+
+// Function to read a JSON file from LittleFS with improved error handling
 String readJsonFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
-        Serial.printf("File not found: %s\n", filePath);
-        return "";
+    USBSerial.printf("Reading JSON file: %s\n", filePath);
+    
+    if (!FileSystemUtils::fileExists(filePath)) {
+        USBSerial.printf("File not found: %s, returning empty JSON\n", filePath);
+        return "{}";
     }
     
-    File file = SPIFFS.open(filePath, "r");
-    if (!file) {
-        Serial.printf("Failed to open file: %s\n", filePath);
-        return "";
+    String content = FileSystemUtils::readFile(filePath);
+    
+    if (content.isEmpty()) {
+        USBSerial.println("File was empty or read failed, returning empty JSON");
+        return "{}";
     }
     
-    String content = file.readString();
-    file.close();
+    // Validate JSON
+    DynamicJsonDocument validator(16);
+    DeserializationError error = deserializeJson(validator, content);
+    if (error) {
+        USBSerial.printf("Warning: File does not contain valid JSON: %s\n", error.c_str());
+        return "{}";
+    }
+    
     return content;
 }
 
-// Function to write a JSON file to SPIFFS
+// Function to write a JSON file to LittleFS with improved error handling
 bool writeJsonFile(const char* filePath, const String& content) {
-    File file = SPIFFS.open(filePath, "w");
-    if (!file) {
-        Serial.printf("Failed to create file: %s\n", filePath);
+    // Validate the JSON before writing
+    DynamicJsonDocument validator(16);
+    DeserializationError error = deserializeJson(validator, content);
+    if (error) {
+        USBSerial.printf("Refusing to write invalid JSON to %s: %s\n", filePath, error.c_str());
         return false;
     }
     
-    size_t bytesWritten = file.print(content);
-    file.close();
-    
-    if (bytesWritten == content.length()) {
-        Serial.printf("File written successfully: %s\n", filePath);
-        return true;
-    } else {
-        Serial.printf("Write failed: %s\n", filePath);
-        return false;
-    }
+    return FileSystemUtils::writeFile(filePath, content);
 }
 
 // Count components of a specific type
@@ -69,6 +75,60 @@ uint8_t countComponentsByType(const String& componentsJson, const char* componen
 }
 
 void initializeModuleInfo() {
+    // Create default files if they don't exist
+    if (!LittleFS.exists("/config/info.json")) {
+        USBSerial.println("info.json not found, creating default");
+        String defaultInfo = R"({
+            "name": "Modular Macropad",
+            "version": "1.0.0",
+            "author": "User",
+            "description": "Default configuration",
+            "module-size": "full",
+            "gridSize": { "rows": 3, "columns": 4 },
+            "defaults": {},
+            "settings": {},
+            "supportedComponentTypes": ["button", "encoder", "display"]
+        })";
+        writeJsonFile("/config/info.json", defaultInfo);
+    }
+    
+    if (!LittleFS.exists("/config/components.json")) {
+        USBSerial.println("components.json not found, creating default");
+        String defaultComponents = R"({
+            "components": [
+                {
+                    "id": "button-0",
+                    "type": "button",
+                    "size": { "rows": 1, "columns": 1 },
+                    "start_location": { "row": 0, "column": 0 }
+                }
+            ]
+        })";
+        writeJsonFile("/config/components.json", defaultComponents);
+    }
+    
+    if (!LittleFS.exists("/config/LEDs.json")) {
+        USBSerial.println("LEDs.json not found, creating default");
+        String defaultLEDs = R"({
+            "leds": {
+                "pin": 7,
+                "brightness": 30,
+                "config": [
+                    {
+                        "id": "led-0",
+                        "stream_address": 0,
+                        "button_id": "button-0",
+                        "color": {"r": 0, "g": 255, "b": 0},
+                        "pressed_color": {"r": 255, "g": 255, "b": 255},
+                        "brightness": 30,
+                        "mode": 0
+                    }
+                ]
+            }
+        })";
+        writeJsonFile("/config/LEDs.json", defaultLEDs);
+    }
+    
     // Load configuration files
     moduleInfo.infoJson = readJsonFile("/config/info.json");
     moduleInfo.componentsJson = readJsonFile("/config/components.json");
@@ -182,7 +242,7 @@ bool mergeConfigFiles() {
     serializeJsonPretty(configDoc, configJson);
     
     // Save to config.json
-    return writeJsonFile("/data/config/config.json", configJson);
+    return writeJsonFile("/config/config.json", configJson);
 }
 
 ModuleCapabilities getModuleCapabilities() {
@@ -259,7 +319,7 @@ const char* getModuleSizeName(ModuleSize size) {
 }
 
 bool loadModuleConfiguration() {
-    String configJson = readJsonFile("/data/config/config.json");
+    String configJson = readJsonFile("/config/config.json");
     if (configJson.isEmpty()) {
         return false;
     }

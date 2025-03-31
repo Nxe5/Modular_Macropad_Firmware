@@ -3,7 +3,7 @@
 
 #include <ArduinoJson.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <map>
 #include <vector>
 

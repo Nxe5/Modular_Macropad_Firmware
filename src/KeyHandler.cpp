@@ -4,7 +4,7 @@
 #include "HIDHandler.h"
 #include "MacroHandler.h"
 #include "ConfigManager.h"
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <USBCDC.h>
 #include <algorithm> // For std::sort
@@ -476,29 +476,33 @@ std::vector<String> KeyHandler::getAvailableLayers() const {
     return layers;
 }
 
-void KeyHandler::saveCurrentLayer() {
-    DynamicJsonDocument doc(1024);
-    doc["current_layer"] = currentLayer;
+bool KeyHandler::saveCurrentLayer() {
+    DynamicJsonDocument doc(256);
+    doc["currentLayer"] = currentLayer;
     
-    File file = SPIFFS.open("/config/current_layer.json", "w");
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    
+    File file = LittleFS.open("/config/current_layer.json", "w");
     if (file) {
-        serializeJson(doc, file);
+        file.print(jsonStr);
         file.close();
-        USBSerial.printf("Current layer '%s' saved to SPIFFS\n", currentLayer.c_str());
+        USBSerial.printf("Current layer '%s' saved to LittleFS\n", currentLayer.c_str());
+        return true;
     } else {
-        USBSerial.println("Failed to save current layer to SPIFFS");
+        USBSerial.println("Failed to save current layer to LittleFS");
+        return false;
     }
 }
 
 bool KeyHandler::loadCurrentLayer() {
-    if (!SPIFFS.exists("/config/current_layer.json")) {
-        USBSerial.println("No saved layer found, using default");
+    if (!LittleFS.exists("/config/current_layer.json")) {
+        currentLayer = "default"; // Use default if no saved layer
         return false;
     }
     
-    File file = SPIFFS.open("/config/current_layer.json", "r");
+    File file = LittleFS.open("/config/current_layer.json", "r");
     if (!file) {
-        USBSerial.println("Failed to open layer file");
         return false;
     }
     
@@ -511,7 +515,7 @@ bool KeyHandler::loadCurrentLayer() {
         return false;
     }
     
-    String savedLayer = doc["current_layer"].as<String>();
+    String savedLayer = doc["currentLayer"].as<String>();
     if (savedLayer.isEmpty()) {
         USBSerial.println("No layer specified in file");
         return false;

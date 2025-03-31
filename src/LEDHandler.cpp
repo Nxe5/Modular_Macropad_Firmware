@@ -2,7 +2,7 @@
 
 #include "LEDHandler.h"
 #include "ModuleSetup.h"
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <algorithm> // For std::min
 
@@ -302,8 +302,8 @@ void createDefaultLEDConfig() {
 
 bool saveDefaultLEDConfig() {
     // Make sure the defaults directory exists
-    if (!SPIFFS.exists("/defaults")) {
-        if (!SPIFFS.mkdir("/defaults")) {
+    if (!LittleFS.exists("/defaults")) {
+        if (!LittleFS.mkdir("/defaults")) {
             USBSerial.println("Failed to create defaults directory");
             return false;
         }
@@ -313,7 +313,7 @@ bool saveDefaultLEDConfig() {
     String config = getLEDConfigJson();
     
     // Save to defaults directory
-    File file = SPIFFS.open("/defaults/LEDs.json", "w");
+    File file = LittleFS.open("/defaults/LEDs.json", "w");
     if (!file) {
         USBSerial.println("Failed to open default LED config file for writing");
         return false;
@@ -853,12 +853,12 @@ bool updateLEDConfigFromJson(const String& json) {
 
 // Helper function to read a file as string (similar to the one in ModuleSetup.cpp)
 String readJsonFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
+    if (!LittleFS.exists(filePath)) {
         USBSerial.printf("File not found: %s\n", filePath);
         return "";
     }
     
-    File file = SPIFFS.open(filePath, "r");
+    File file = LittleFS.open(filePath, "r");
     if (!file) {
         USBSerial.printf("Failed to open file: %s\n", filePath);
         return "";
@@ -1048,15 +1048,15 @@ bool saveLEDConfig() {
     String config = getLEDConfigJson();
     
     // Make sure config directory exists
-    if (!SPIFFS.exists("/config")) {
-        if (!SPIFFS.mkdir("/config")) {
+    if (!LittleFS.exists("/config")) {
+        if (!LittleFS.mkdir("/config")) {
             USBSerial.println("Failed to create config directory");
             return false;
         }
     }
     
     // Open the file for writing
-    File file = SPIFFS.open("/config/LEDs.json", "w");
+    File file = LittleFS.open("/config/LEDs.json", "w");
     if (!file) {
         USBSerial.println("Failed to open LED config file for writing");
         return false;
