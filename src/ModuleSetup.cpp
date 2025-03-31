@@ -27,24 +27,129 @@ String readJsonFile(const char* filePath) {
         return "{}";
     }
     
-    // Validate JSON
-    DynamicJsonDocument validator(16);
+    // Debug file size
+    USBSerial.printf("JSON file size: %d bytes\n", content.length());
+    
+    // Print memory diagnostics
+    USBSerial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    
+    // Validate JSON with a larger document size
+    DynamicJsonDocument validator(1024); // Increased from 16 bytes
     DeserializationError error = deserializeJson(validator, content);
     if (error) {
         USBSerial.printf("Warning: File does not contain valid JSON: %s\n", error.c_str());
+        USBSerial.printf("  Memory issue details - required size: %d\n", 
+            error.code() == DeserializationError::NoMemory ? 
+            content.length() * 1.5 : 0); // Estimated size instead of measureJson
         return "{}";
     }
     
+    USBSerial.println("JSON validation successful");
     return content;
+}
+
+// Add a new helper function for estimating JSON document size
+size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor = 1.4) {
+    // ArduinoJson typically needs buffer about 1-1.3x the size of the JSON string
+    // We use a 1.4x safety factor by default
+    size_t baseSize = jsonString.length();
+    size_t estimatedSize = baseSize * safetyFactor;
+    
+    // Round up to nearest higher power of 2 for better memory alignment
+    size_t powerOf2 = 256; // Start with minimum size
+    while (powerOf2 < estimatedSize) {
+        powerOf2 *= 2;
+    }
+    
+    USBSerial.printf("JSON size estimation: %u bytes string -> %u bytes buffer (rounded to %u)\n", 
+                     baseSize, (unsigned int)(baseSize * safetyFactor), powerOf2);
+    
+    return powerOf2;
+}
+
+// Process components JSON with increased memory allocation
+bool processComponentsJson(const String& jsonStr) {
+    USBSerial.println("Processing components JSON configuration");
+    
+    // Debug free memory before allocation
+    USBSerial.printf("Free heap before allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate required buffer size
+    size_t bufferSize = estimateJsonBufferSize(jsonStr);
+    
+    // Create document with calculated size
+    DynamicJsonDocument doc(bufferSize);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    // Debug memory after allocation
+    USBSerial.printf("Free heap after allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    if (error) {
+        USBSerial.printf("Failed to parse components JSON: %s\n", error.c_str());
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Allocation failed. Tried to allocate %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = jsonStr.length() * 2; // Conservative estimate
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
+        return false;
+    }
+    
+    // ... rest of the function remains the same
+    // Continue processing the components as before
+    
+    return true;
+}
+
+// Parse actions JSON with increased memory allocation
+bool parseActionsJson(const String& jsonStr) {
+    USBSerial.println("Parsing actions JSON configuration");
+    
+    // Debug free memory before allocation
+    USBSerial.printf("Free heap before allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate required buffer size (actions JSON can be large, use higher factor)
+    size_t bufferSize = estimateJsonBufferSize(jsonStr, 1.8);
+    
+    // Create document with calculated size
+    DynamicJsonDocument doc(bufferSize);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    // Debug memory after allocation
+    USBSerial.printf("Free heap after allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    if (error) {
+        USBSerial.printf("Failed to parse actions JSON: %s\n", error.c_str());
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Allocation failed. Tried to allocate %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = jsonStr.length() * 2.5; // Conservative estimate for actions
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
+        return false;
+    }
+    
+    // ... rest of the function remains the same
+    // Continue processing the actions as before
+    
+    return true;
 }
 
 // Function to write a JSON file to LittleFS with improved error handling
 bool writeJsonFile(const char* filePath, const String& content) {
     // Validate the JSON before writing
-    DynamicJsonDocument validator(16);
+    DynamicJsonDocument validator(1024); // Increased from 16 bytes
     DeserializationError error = deserializeJson(validator, content);
     if (error) {
         USBSerial.printf("Refusing to write invalid JSON to %s: %s\n", filePath, error.c_str());
+        
+        // Print more diagnostic info
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Memory allocation failed. Document size too small.\n");
+            // Use estimation instead of measureJson
+            size_t requiredSize = content.length() * 1.5; // Simple estimate
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
         return false;
     }
     

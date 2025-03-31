@@ -5,12 +5,15 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <algorithm> // For std::min
+#include <Arduino.h>
+#include <USBCDC.h>
 
 #ifdef ENABLE_POWER_MONITORING
 #include <driver/adc.h>
 #endif
 
 extern USBCDC USBSerial;
+extern size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor);
 
 // LED strip will be initialized dynamically based on config
 Adafruit_NeoPixel* strip = nullptr;
@@ -39,7 +42,7 @@ bool lowPowerMode = false;
 // Forward declaration of helper functions
 static String readJsonFile(const char* filePath);
 
-void initializeLED() {
+void initializeLED(uint8_t numLEDsToInit, uint8_t ledPin, uint8_t brightness) {
     try {
         #ifdef ENABLE_POWER_MONITORING
         // Setup ADC for voltage monitoring (Pin 34 - ADC1 Channel 6)
@@ -47,157 +50,178 @@ void initializeLED() {
         adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11);
         #endif
         
-        // Try to load LED configuration
-        String ledJson = readJsonFile("/config/LEDs.json");
-        if (ledJson.isEmpty()) {
-            USBSerial.println("LED config not found, creating defaults");
-            
-            // Use defaults from header with safer brightness
-            numLEDs = DEFAULT_NUM_LEDS;
-            strip = new Adafruit_NeoPixel(numLEDs, DEFAULT_LED_PIN, NEO_GRB + NEO_KHZ800);
-            
-            // Create and save default configuration
-            createDefaultLEDConfig();
+        // Use parameters if provided, otherwise defaults
+        if (numLEDsToInit > 0) {
+            numLEDs = numLEDsToInit;
         } else {
-            // Parse LED configuration
-            DynamicJsonDocument doc(8192);
-            DeserializationError error = deserializeJson(doc, ledJson);
-            
-            if (error) {
-                USBSerial.print("Error parsing LED config: ");
-                USBSerial.println(error.c_str());
+            // Try to load LED configuration
+            String ledJson = readJsonFile("/config/LEDs.json");
+            if (ledJson.isEmpty()) {
+                USBSerial.println("LED config not found, creating defaults");
                 
-                // Use defaults
+                // Use defaults from header
                 numLEDs = DEFAULT_NUM_LEDS;
-                strip = new Adafruit_NeoPixel(numLEDs, DEFAULT_LED_PIN, NEO_GRB + NEO_KHZ800);
-                createDefaultLEDConfig();
-            } else {
-                // Get LED count and pin from config
-                numLEDs = doc["leds"]["config"].size();
-                uint8_t ledPin = doc["leds"]["pin"] | DEFAULT_LED_PIN; // Use default if not specified
-                
-                USBSerial.printf("Initializing %d LEDs on pin %d\n", numLEDs, ledPin);
                 strip = new Adafruit_NeoPixel(numLEDs, ledPin, NEO_GRB + NEO_KHZ800);
                 
-                // Get global brightness
-                uint8_t brightness = doc["leds"]["brightness"] | 30; // Default to 30% brightness for safety
+                // Create and save default configuration
+                createDefaultLEDConfig();
+            } else {
+                // Parse LED configuration
+                DynamicJsonDocument doc(8192);
+                DeserializationError error = deserializeJson(doc, ledJson);
                 
-                // Initialize NeoPixel strip
-                strip->begin();
-                setGlobalBrightness(brightness); // Use power-aware brightness setting
-                strip->clear();
-                strip->show();
-                
-                // Create LED configs array
-                ledConfigs = new LEDConfig[numLEDs];
-                
-                // Clear the button LED mapping first
-                buttonLEDMap.clear();
-                
-                // Apply saved LED colors if present
-                if (doc["leds"].containsKey("config")) {
-                    JsonArray ledsConfig = doc["leds"]["config"];
-                    for (JsonObject led : ledsConfig) {
-                        if (led.containsKey("stream_address")) {
-                            uint8_t index = led["stream_address"];
-                            
-                            if (index < numLEDs) {
-                                // Store the LED configuration
-                                ledConfigs[index].r = led["color"]["r"] | 0;
-                                ledConfigs[index].g = led["color"]["g"] | 255;
-                                ledConfigs[index].b = led["color"]["b"] | 0;
-                                ledConfigs[index].brightness = led["brightness"] | 30; // Lower default brightness
-                                ledConfigs[index].mode = led["mode"] | LED_MODE_STATIC;
-                                ledConfigs[index].needsUpdate = true;
-                                ledConfigs[index].isActive = false;
-                                
-                                // Handle pressed colors if available
-                                if (led.containsKey("pressed_color")) {
-                                    ledConfigs[index].pressedR = led["pressed_color"]["r"] | 255;
-                                    ledConfigs[index].pressedG = led["pressed_color"]["g"] | 255;
-                                    ledConfigs[index].pressedB = led["pressed_color"]["b"] | 255;
-                                } else {
-                                    // Default to white for pressed color
-                                    ledConfigs[index].pressedR = 255;
-                                    ledConfigs[index].pressedG = 255;
-                                    ledConfigs[index].pressedB = 255;
-                                }
-                                
-                                // Handle button mapping if available
-                                if (led.containsKey("button_id")) {
-                                    String buttonId = led["button_id"].as<String>();
-                                    ledConfigs[index].buttonId = buttonId;
-                                    
-                                    // Add this LED to the button mapping
-                                    auto it = buttonLEDMap.find(buttonId);
-                                    if (it != buttonLEDMap.end()) {
-                                        // Button already exists, add this LED to its list
-                                        it->second.ledIndices.push_back(index);
-                                    } else {
-                                        // Create new button mapping
-                                        ButtonLEDMapping mapping;
-                                        mapping.buttonId = buttonId;
-                                        mapping.ledIndices.push_back(index);
-                                        
-                                        // Default colors
-                                        mapping.defaultColor[0] = led["color"]["r"] | 0;
-                                        mapping.defaultColor[1] = led["color"]["g"] | 255;
-                                        mapping.defaultColor[2] = led["color"]["b"] | 0;
-                                        
-                                        // Pressed colors - default to white if not specified
-                                        if (led.containsKey("pressed_color")) {
-                                            mapping.pressedColor[0] = led["pressed_color"]["r"] | 255;
-                                            mapping.pressedColor[1] = led["pressed_color"]["g"] | 255;
-                                            mapping.pressedColor[2] = led["pressed_color"]["b"] | 255;
-                                        }
-                                        
-                                        buttonLEDMap[buttonId] = mapping;
-                                    }
-                                } else if (strncmp(led["id"].as<const char*>(), "led-", 4) == 0) {
-                                    // Fallback for older configs - try to derive button ID from LED ID
-                                    int ledNum = atoi(led["id"].as<const char*>() + 4);
-                                    String buttonId = "button-" + String(ledNum);
-                                    ledConfigs[index].buttonId = buttonId;
-                                    
-                                    // Create button-LED mapping
-                                    auto it = buttonLEDMap.find(buttonId);
-                                    if (it != buttonLEDMap.end()) {
-                                        // Button already exists, add this LED
-                                        it->second.ledIndices.push_back(index);
-                                    } else {
-                                        // Create new mapping
-                                        ButtonLEDMapping mapping;
-                                        mapping.buttonId = buttonId;
-                                        mapping.ledIndices.push_back(index);
-                                        mapping.defaultColor[0] = led["color"]["r"] | 0;
-                                        mapping.defaultColor[1] = led["color"]["g"] | 255;
-                                        mapping.defaultColor[2] = led["color"]["b"] | 0;
-                                        
-                                        buttonLEDMap[buttonId] = mapping;
-                                    }
-                                }
-                                
-                                // Set the LED color
-                                float factor = ledConfigs[index].brightness / 255.0;
-                                strip->setPixelColor(index, strip->Color(
-                                    ledConfigs[index].r * factor,
-                                    ledConfigs[index].g * factor,
-                                    ledConfigs[index].b * factor
-                                ));
-                            }
-                        }
+                if (error) {
+                    USBSerial.print("Error parsing LED config: ");
+                    USBSerial.println(error.c_str());
+                    
+                    // Use defaults
+                    numLEDs = DEFAULT_NUM_LEDS;
+                    strip = new Adafruit_NeoPixel(numLEDs, ledPin, NEO_GRB + NEO_KHZ800);
+                    createDefaultLEDConfig();
+                } else {
+                    // Get LED count and pin from config
+                    numLEDs = doc["leds"]["config"].size();
+                    
+                    // Use provided pin or configuration pin or default
+                    if (ledPin == 7) { // If default was passed
+                        ledPin = doc["leds"]["pin"] | DEFAULT_LED_PIN; // Use from config or default
                     }
                     
-                    // Check for animation settings
-                    if (doc["leds"]["animation"]["active"] | false) {
-                        animationMode = doc["leds"]["animation"]["mode"] | 0;
-                        animationSpeed = doc["leds"]["animation"]["speed"] | 100;
-                        startAnimation(animationMode, animationSpeed);
-                    } else {
-                        strip->show(); // Show static colors
+                    USBSerial.printf("Initializing %d LEDs on pin %d\n", numLEDs, ledPin);
+                    strip = new Adafruit_NeoPixel(numLEDs, ledPin, NEO_GRB + NEO_KHZ800);
+                    
+                    // Get brightness from parameters or config
+                    if (brightness == 30) { // If default was passed
+                        brightness = doc["leds"]["brightness"] | 30; // Use from config or default
+                    }
+                    
+                    // Initialize NeoPixel strip
+                    strip->begin();
+                    setGlobalBrightness(brightness); // Use power-aware brightness setting
+                    strip->clear();
+                    strip->show();
+                    
+                    // Create LED configs array
+                    ledConfigs = new LEDConfig[numLEDs];
+                    
+                    // Clear the button LED mapping first
+                    buttonLEDMap.clear();
+                    
+                    // Apply saved LED colors if present
+                    if (doc["leds"].containsKey("config")) {
+                        JsonArray ledsConfig = doc["leds"]["config"];
+                        for (JsonObject led : ledsConfig) {
+                            if (led.containsKey("stream_address")) {
+                                uint8_t index = led["stream_address"];
+                                
+                                if (index < numLEDs) {
+                                    // Store the LED configuration
+                                    ledConfigs[index].r = led["color"]["r"] | 0;
+                                    ledConfigs[index].g = led["color"]["g"] | 255;
+                                    ledConfigs[index].b = led["color"]["b"] | 0;
+                                    ledConfigs[index].brightness = led["brightness"] | 30; // Lower default brightness
+                                    ledConfigs[index].mode = led["mode"] | LED_MODE_STATIC;
+                                    ledConfigs[index].needsUpdate = true;
+                                    ledConfigs[index].isActive = false;
+                                    
+                                    // Handle pressed colors if available
+                                    if (led.containsKey("pressed_color")) {
+                                        ledConfigs[index].pressedR = led["pressed_color"]["r"] | 255;
+                                        ledConfigs[index].pressedG = led["pressed_color"]["g"] | 255;
+                                        ledConfigs[index].pressedB = led["pressed_color"]["b"] | 255;
+                                    } else {
+                                        // Default to white for pressed color
+                                        ledConfigs[index].pressedR = 255;
+                                        ledConfigs[index].pressedG = 255;
+                                        ledConfigs[index].pressedB = 255;
+                                    }
+                                    
+                                    // Handle button mapping if available
+                                    if (led.containsKey("button_id")) {
+                                        String buttonId = led["button_id"].as<String>();
+                                        ledConfigs[index].buttonId = buttonId;
+                                        
+                                        // Add this LED to the button mapping
+                                        auto it = buttonLEDMap.find(buttonId);
+                                        if (it != buttonLEDMap.end()) {
+                                            // Button already exists, add this LED to its list
+                                            it->second.ledIndices.push_back(index);
+                                        } else {
+                                            // Create new button mapping
+                                            ButtonLEDMapping mapping;
+                                            mapping.buttonId = buttonId;
+                                            mapping.ledIndices.push_back(index);
+                                            
+                                            // Default colors
+                                            mapping.defaultColor[0] = led["color"]["r"] | 0;
+                                            mapping.defaultColor[1] = led["color"]["g"] | 255;
+                                            mapping.defaultColor[2] = led["color"]["b"] | 0;
+                                            
+                                            // Pressed colors - default to white if not specified
+                                            if (led.containsKey("pressed_color")) {
+                                                mapping.pressedColor[0] = led["pressed_color"]["r"] | 255;
+                                                mapping.pressedColor[1] = led["pressed_color"]["g"] | 255;
+                                                mapping.pressedColor[2] = led["pressed_color"]["b"] | 255;
+                                            }
+                                            
+                                            buttonLEDMap[buttonId] = mapping;
+                                        }
+                                    } else if (strncmp(led["id"].as<const char*>(), "led-", 4) == 0) {
+                                        // Fallback for older configs - try to derive button ID from LED ID
+                                        int ledNum = atoi(led["id"].as<const char*>() + 4);
+                                        String buttonId = "button-" + String(ledNum);
+                                        ledConfigs[index].buttonId = buttonId;
+                                        
+                                        // Create button-LED mapping
+                                        auto it = buttonLEDMap.find(buttonId);
+                                        if (it != buttonLEDMap.end()) {
+                                            // Button already exists, add this LED
+                                            it->second.ledIndices.push_back(index);
+                                        } else {
+                                            // Create new mapping
+                                            ButtonLEDMapping mapping;
+                                            mapping.buttonId = buttonId;
+                                            mapping.ledIndices.push_back(index);
+                                            mapping.defaultColor[0] = led["color"]["r"] | 0;
+                                            mapping.defaultColor[1] = led["color"]["g"] | 255;
+                                            mapping.defaultColor[2] = led["color"]["b"] | 0;
+                                            
+                                            buttonLEDMap[buttonId] = mapping;
+                                        }
+                                    }
+                                    
+                                    // Set the LED color
+                                    float factor = ledConfigs[index].brightness / 255.0;
+                                    strip->setPixelColor(index, strip->Color(
+                                        ledConfigs[index].r * factor,
+                                        ledConfigs[index].g * factor,
+                                        ledConfigs[index].b * factor
+                                    ));
+                                }
+                            }
+                        }
+                        
+                        // Check for animation settings
+                        if (doc["leds"]["animation"]["active"] | false) {
+                            animationMode = doc["leds"]["animation"]["mode"] | 0;
+                            animationSpeed = doc["leds"]["animation"]["speed"] | 100;
+                            startAnimation(animationMode, animationSpeed);
+                        } else {
+                            strip->show(); // Show static colors
+                        }
                     }
                 }
             }
+        }
+        
+        // If strip not created yet, create it now with provided parameters
+        if (!strip) {
+            USBSerial.printf("Creating new LED strip with %d LEDs on pin %d\n", numLEDs, ledPin);
+            strip = new Adafruit_NeoPixel(numLEDs, ledPin, NEO_GRB + NEO_KHZ800);
+            strip->begin();
+            strip->setBrightness(brightness);
+            strip->clear();
+            strip->show();
         }
         
         // If LED configs not created yet, create them now
@@ -744,12 +768,55 @@ String getLEDConfigJson() {
 
 // JSON utility function for updating LED configuration from JSON
 bool updateLEDConfigFromJson(const String& json) {
-    DynamicJsonDocument doc(4096);
+    USBSerial.println("Updating LED config from JSON");
+    
+    // Debug before parsing
+    USBSerial.printf("JSON size: %d bytes\n", json.length());
+    USBSerial.printf("Free heap before parsing: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate buffer size
+    size_t bufferSize = estimateJsonBufferSize(json, 1.5);
+    
+    DynamicJsonDocument doc(bufferSize);
     DeserializationError error = deserializeJson(doc, json);
     
+    // Debug after parsing
+    USBSerial.printf("Free heap after parsing: %d bytes\n", ESP.getFreeHeap());
+    
     if (error) {
-        USBSerial.print("JSON parse error: ");
-        USBSerial.println(error.c_str());
+        USBSerial.printf("JSON parse error: %s\n", error.c_str());
+        
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Memory allocation failed. Tried buffer size: %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = json.length() * 2; // Simple estimation
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+            
+            // If we can measure and allocate the required size, retry
+            if (requiredSize > 0 && requiredSize <= ESP.getFreeHeap() / 2) {
+                USBSerial.printf("Retrying with estimated size: %u bytes\n", requiredSize);
+                DynamicJsonDocument retryDoc(requiredSize);
+                error = deserializeJson(retryDoc, json);
+                
+                if (!error) {
+                    // Use this document instead
+                    // Update global brightness if present
+                    if (retryDoc.containsKey("global_brightness") && strip) {
+                        uint8_t brightness = retryDoc["global_brightness"];
+                        strip->setBrightness(brightness);
+                    }
+                    
+                    // Process LED configs
+                    if (retryDoc.containsKey("leds")) {
+                        JsonArray leds = retryDoc["leds"];
+                        for (JsonObject led : leds) {
+                            processLEDConfig(led);
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
         return false;
     }
     
@@ -762,93 +829,47 @@ bool updateLEDConfigFromJson(const String& json) {
     // Update LED configurations if present
     if (doc.containsKey("leds")) {
         JsonArray leds = doc["leds"];
-        
         for (JsonObject led : leds) {
-            if (led.containsKey("index")) {
-                uint8_t index = led["index"];
-                
-                if (index < numLEDs) {
-                    // Basic LED properties
-                    if (led.containsKey("mode")) {
-                        ledConfigs[index].mode = led["mode"];
-                    }
-                    
-                    if (led.containsKey("r") && led.containsKey("g") && led.containsKey("b")) {
-                        ledConfigs[index].r = led["r"];
-                        ledConfigs[index].g = led["g"];
-                        ledConfigs[index].b = led["b"];
-                    }
-                    
-                    if (led.containsKey("brightness")) {
-                        ledConfigs[index].brightness = led["brightness"];
-                    }
-                    
-                    // Button mode specific properties
-                    if (ledConfigs[index].mode == LED_MODE_BUTTON) {
-                        if (led.containsKey("button_id")) {
-                            ledConfigs[index].buttonId = led["button_id"].as<String>();
-                        }
-                        
-                        if (led.containsKey("pressed_r") && led.containsKey("pressed_g") && led.containsKey("pressed_b")) {
-                            ledConfigs[index].pressedR = led["pressed_r"];
-                            ledConfigs[index].pressedG = led["pressed_g"];
-                            ledConfigs[index].pressedB = led["pressed_b"];
-                        }
-                    }
-                    
-                    // Mark as needing update
-                    ledConfigs[index].needsUpdate = true;
-                }
-            }
-        }
-    }
-    
-    // Update button-LED mappings if present
-    if (doc.containsKey("button_led_mappings")) {
-        // Clear existing mappings
-        buttonLEDMap.clear();
-        
-        JsonArray mappings = doc["button_led_mappings"];
-        for (JsonObject mapping : mappings) {
-            if (mapping.containsKey("button_id")) {
-                String buttonId = mapping["button_id"].as<String>();
-                ButtonLEDMapping newMapping;
-                newMapping.buttonId = buttonId;
-                
-                // Process LED indices
-                if (mapping.containsKey("led_indices") && mapping["led_indices"].is<JsonArray>()) {
-                    JsonArray indices = mapping["led_indices"];
-                    for (JsonVariant idx : indices) {
-                        uint8_t ledIndex = idx.as<uint8_t>();
-                        if (ledIndex < numLEDs) {
-                            newMapping.ledIndices.push_back(ledIndex);
-                        }
-                    }
-                }
-                
-                // Process default color
-                if (mapping.containsKey("default_color") && mapping["default_color"].is<JsonObject>()) {
-                    JsonObject defaultColor = mapping["default_color"];
-                    if (defaultColor.containsKey("r")) newMapping.defaultColor[0] = defaultColor["r"];
-                    if (defaultColor.containsKey("g")) newMapping.defaultColor[1] = defaultColor["g"];
-                    if (defaultColor.containsKey("b")) newMapping.defaultColor[2] = defaultColor["b"];
-                }
-                
-                // Process pressed color
-                if (mapping.containsKey("pressed_color") && mapping["pressed_color"].is<JsonObject>()) {
-                    JsonObject pressedColor = mapping["pressed_color"];
-                    if (pressedColor.containsKey("r")) newMapping.pressedColor[0] = pressedColor["r"];
-                    if (pressedColor.containsKey("g")) newMapping.pressedColor[1] = pressedColor["g"];
-                    if (pressedColor.containsKey("b")) newMapping.pressedColor[2] = pressedColor["b"];
-                }
-                
-                // Add to map
-                buttonLEDMap[buttonId] = newMapping;
-            }
+            processLEDConfig(led);
         }
     }
     
     return true;
+}
+
+// Helper function to process a single LED config object
+void processLEDConfig(JsonObject& led) {
+    if (led.containsKey("index")) {
+        int index = led["index"];
+        if (index >= 0 && index < numLEDs) {
+            // Update color if present
+            if (led.containsKey("color")) {
+                ledConfigs[index].r = led["color"]["r"] | 0;
+                ledConfigs[index].g = led["color"]["g"] | 0;
+                ledConfigs[index].b = led["color"]["b"] | 0;
+            }
+            
+            // Update pressed color if present
+            if (led.containsKey("pressed_color")) {
+                ledConfigs[index].pressedR = led["pressed_color"]["r"] | 0;
+                ledConfigs[index].pressedG = led["pressed_color"]["g"] | 0;
+                ledConfigs[index].pressedB = led["pressed_color"]["b"] | 0;
+            }
+            
+            // Update brightness if present
+            if (led.containsKey("brightness")) {
+                ledConfigs[index].brightness = led["brightness"];
+            }
+            
+            // Update button ID if present
+            if (led.containsKey("button_id")) {
+                ledConfigs[index].buttonId = led["button_id"].as<String>();
+            }
+            
+            // Apply the updates to the LED
+            updateLED(index);
+        }
+    }
 }
 
 // Helper function to read a file as string (similar to the one in ModuleSetup.cpp)
@@ -1073,5 +1094,38 @@ bool saveLEDConfig() {
     } else {
         USBSerial.println("Failed to save LED configuration");
         return false;
+    }
+}
+
+// Function to update a single LED's color based on its configuration
+void updateLED(uint8_t index) {
+    if (!strip || index >= numLEDs) {
+        USBSerial.printf("Invalid LED index: %d\n", index);
+        return;
+    }
+    
+    try {
+        float factor = ledConfigs[index].brightness / 255.0;
+        
+        if (ledConfigs[index].isActive) {
+            // LED is active (button pressed) - use pressed color
+            strip->setPixelColor(index, strip->Color(
+                ledConfigs[index].pressedR * factor,
+                ledConfigs[index].pressedG * factor,
+                ledConfigs[index].pressedB * factor
+            ));
+        } else {
+            // LED is inactive (normal state) - use default color
+            strip->setPixelColor(index, strip->Color(
+                ledConfigs[index].r * factor,
+                ledConfigs[index].g * factor, 
+                ledConfigs[index].b * factor
+            ));
+        }
+        
+        strip->show();
+        ledConfigs[index].needsUpdate = false;
+    } catch (const std::exception& e) {
+        USBSerial.printf("Error in updateLED: %s\n", e.what());
     }
 }

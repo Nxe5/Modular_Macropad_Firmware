@@ -1,13 +1,13 @@
 // LEDHandler.h
 
-#ifndef LED_HANDLER_H
-#define LED_HANDLER_H
+#pragma once
 
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
 #include <map>
 #include <vector>
 #include <string>
+#include <USBCDC.h>
 
 // Define to enable power monitoring (requires pin 34 connected to VBUS via voltage divider)
 // #define ENABLE_POWER_MONITORING
@@ -20,6 +20,9 @@
 #define LED_MODE_STATIC    0 // Static color
 #define LED_MODE_ANIMATION 1 // Part of an animation
 #define LED_MODE_BUTTON    2 // Button-controlled mode
+#define LED_MODE_PULSE     3 // Pulse mode
+#define LED_MODE_RAINBOW   4 // Rainbow mode
+#define LED_MODE_BREATHING 5 // Breathing mode
 
 // Animation Modes
 #define LED_ANIM_RAINBOW     0
@@ -29,25 +32,27 @@
 
 // LED Configuration structure
 struct LEDConfig {
-    uint8_t r;                // Default red value
-    uint8_t g;                // Default green value
-    uint8_t b;                // Default blue value
-    uint8_t brightness;       // LED brightness (0-255)
-    uint8_t mode;             // LED mode (static, animated, etc.)
-    String buttonId;          // ID of button that controls this LED
-    uint8_t pressedR;         // Red value when pressed
-    uint8_t pressedG;         // Green value when pressed
-    uint8_t pressedB;         // Blue value when pressed
-    bool needsUpdate;         // Flag for batch updates
-    bool isActive;            // Whether the LED is currently active
+    String id = "";
+    uint8_t streamAddress = 0;
+    String buttonId = "";
+    uint8_t r = 0;                // Default red value
+    uint8_t g = 255;              // Default green value
+    uint8_t b = 0;                // Default blue value
+    uint8_t pressedR = 255;        // Red value when pressed
+    uint8_t pressedG = 255;        // Green value when pressed
+    uint8_t pressedB = 255;        // Blue value when pressed
+    uint8_t brightness = 30;       // LED brightness (0-255)
+    uint8_t mode = LED_MODE_BUTTON; // LED mode (static, animated, etc.)
+    bool needsUpdate = true;        // Flag for batch updates
+    bool isActive = true;           // Whether the LED is currently active
 };
 
 // Button-LED mapping structure
 struct ButtonLEDMapping {
     String buttonId;
     std::vector<uint8_t> ledIndices; // Multiple LED indices for one button
-    uint8_t defaultColor[3];         // RGB
-    uint8_t pressedColor[3];         // RGB when button is pressed
+    uint8_t defaultColor[3] = {0, 255, 0};       // Default color when button is not pressed (r,g,b)
+    uint8_t pressedColor[3] = {255, 255, 255};   // Color when button is pressed (r,g,b)
     
     // Constructor for default initialization
     ButtonLEDMapping() {
@@ -61,7 +66,7 @@ struct ButtonLEDMapping {
 };
 
 // Basic functions
-void initializeLED();
+void initializeLED(uint8_t numLEDsToInit = 0, uint8_t ledPin = 7, uint8_t brightness = 30);
 void setLEDColor(uint8_t index, uint8_t r, uint8_t g, uint8_t b);
 void setLEDColorWithBrightness(uint8_t index, uint8_t r, uint8_t g, uint8_t b, uint8_t brightness, bool isPressedState = false);
 void setLEDColorHex(uint8_t index, uint32_t hexColor);
@@ -109,4 +114,11 @@ extern uint8_t animationMode;
 extern uint16_t animationSpeed;
 extern std::map<String, ButtonLEDMapping> buttonLEDMap;
 
-#endif
+// Forward declaration of estimateJsonBufferSize from ModuleSetup.cpp
+extern size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor = 1.4);
+
+// Function declarations
+void updateLED(uint8_t index);
+void updateAllLEDs();
+void setLEDButtonState(const String& buttonId, bool pressed);
+void processLEDConfig(JsonObject& led);

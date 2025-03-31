@@ -40,6 +40,8 @@ public:
     static std::map<String, ActionConfig> loadActions(const String& filePath);    
     static String readFile(const char* filePath);
     
+    // Parse the actions file
+    static std::map<String, ActionConfig> parseActionsFile(File &file);
 };
 
 #endif // CONFIG_MANAGER_H

@@ -530,14 +530,7 @@ void createDefaultConfigFiles() {
         success &= FileSystemUtils::writeFile("/config/info.json", defaultInfo);
     }
     
-    // Also create compatibility files in /data/config
-    if (!FileSystemUtils::fileExists("/data/config/reports.json")) {
-        success &= FileSystemUtils::writeFile("/data/config/reports.json", defaultReports);
-    }
-    
-    if (!FileSystemUtils::fileExists("/data/config/actions.json")) {
-        success &= FileSystemUtils::writeFile("/data/config/actions.json", defaultActions);
-    }
+    // No longer create files in /data/config
     
     if (success) {
         USBSerial.println("All default config files created successfully");
@@ -551,6 +544,270 @@ void listDir(const char * dirname, uint8_t levels) {
     FileSystemUtils::listDir(dirname, levels);
 }
 
+// Helper function to dump actions.json file content
+void dumpActionsFile() {
+    USBSerial.println("\n==== ACTIONS FILE DUMP ====");
+    
+    // Check both possible locations
+    const char* paths[] = {"/config/actions.json", "/data/config/actions.json"};
+    
+    for (const char* path : paths) {
+        USBSerial.printf("Checking path: %s\n", path);
+        
+        if (FileSystemUtils::fileExists(path)) {
+            USBSerial.printf("File exists at %s\n", path);
+            
+            // Get file size
+            File file = LittleFS.open(path, "r");
+            if (file) {
+                size_t fileSize = file.size();
+                USBSerial.printf("File size: %d bytes\n", fileSize);
+                
+                // Read and print file contents
+                if (fileSize > 0) {
+                    String content = file.readString();
+                    USBSerial.println("File content:");
+                    USBSerial.println(content);
+                } else {
+                    USBSerial.println("File is empty!");
+                }
+                file.close();
+            } else {
+                USBSerial.println("Failed to open file");
+            }
+        } else {
+            USBSerial.printf("File does not exist at %s\n", path);
+        }
+    }
+    
+    USBSerial.println("==== END OF DUMP ====\n");
+}
+
+// Helper function to create a working actions.json file
+void createWorkingActionsFile() {
+    USBSerial.println("\n==== CREATING WORKING ACTIONS FILE ====");
+    
+    // Create a simple but working actions.json file with common buttons configured
+    // Using a simpler structure with just enough buttons to test
+    String workingActions = R"({
+  "actions": {
+    "layer-name": "default-actions-layer",
+    "active": true,
+    "layer-config": {
+      "button-1": {
+        "type": "hid",
+        "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      },
+      "button-2": {
+        "type": "hid",
+        "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      },
+      "button-3": {
+        "type": "hid",
+        "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      },
+      "button-4": {
+        "type": "hid",
+        "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      }
+    }
+  }
+})";
+
+    // Create the data/config directory if it doesn't exist
+    FileSystemUtils::createDirPath("/data/config");
+    
+    // Save to the correct location
+    bool success = FileSystemUtils::writeFile("/data/config/actions.json", workingActions);
+    
+    if (success) {
+        USBSerial.println("Working actions file created successfully at /data/config/actions.json!");
+        
+        // Verify the file was written correctly
+        File file = LittleFS.open("/data/config/actions.json", "r");
+        if (file) {
+            size_t size = file.size();
+            USBSerial.printf("Verified file exists with size: %d bytes\n", size);
+            
+            if (size > 0) {
+                String content = file.readString();
+                if (content == workingActions) {
+                    USBSerial.println("File content matches exactly what we wrote");
+                } else {
+                    USBSerial.println("WARNING: File content does not match what we wrote!");
+                }
+            }
+            file.close();
+        } else {
+            USBSerial.println("WARNING: Could not open file for verification!");
+        }
+        
+    } else {
+        USBSerial.println("Failed to create working actions file!");
+    }
+    
+    // Remove the old file in /config if it exists
+    if (FileSystemUtils::fileExists("/config/actions.json")) {
+        if (LittleFS.remove("/config/actions.json")) {
+            USBSerial.println("Removed old file at /config/actions.json");
+        } else {
+            USBSerial.println("Failed to remove old file at /config/actions.json");
+        }
+    }
+    
+    USBSerial.println("You may need to restart the device for changes to take effect");
+    USBSerial.println("==== DONE ====\n");
+}
+
+// Helper function for detailed filesystem diagnostics
+void runFilesystemDiagnostics() {
+    USBSerial.println("\n==== DETAILED FILESYSTEM DIAGNOSTICS ====");
+    
+    // Check if LittleFS is mounted
+    if (!LittleFS.begin(false)) {
+        USBSerial.println("ERROR: LittleFS not mounted!");
+        return;
+    }
+    
+    // Get filesystem info - this is different for ESP32
+    USBSerial.printf("Filesystem Info:\n");
+    USBSerial.printf("  Total space: %u bytes\n", LittleFS.totalBytes());
+    USBSerial.printf("  Used space: %u bytes\n", LittleFS.usedBytes());
+    USBSerial.printf("  Free space: %u bytes\n", LittleFS.totalBytes() - LittleFS.usedBytes());
+    
+    // Check and list root directory
+    File root = LittleFS.open("/");
+    if (!root) {
+        USBSerial.println("ERROR: Failed to open root directory");
+        return;
+    }
+    
+    if (!root.isDirectory()) {
+        USBSerial.println("ERROR: Root is not a directory");
+        return;
+    }
+    
+    // List base directories
+    USBSerial.println("\nBase directories:");
+    String baseDirs[] = {"/data", "/data/config", "/config", "/web", "/macros"};
+    for (const String& dir : baseDirs) {
+        if (LittleFS.exists(dir)) {
+            USBSerial.printf("  %s - EXISTS\n", dir.c_str());
+            
+            // Check if really a directory
+            File testDir = LittleFS.open(dir);
+            if (!testDir) {
+                USBSerial.printf("    ERROR: Could not open %s\n", dir.c_str());
+                continue;
+            }
+            
+            if (!testDir.isDirectory()) {
+                USBSerial.printf("    WARNING: %s exists but is not a directory!\n", dir.c_str());
+                continue;
+            }
+            
+            // List files in this directory
+            USBSerial.printf("    Files in %s:\n", dir.c_str());
+            File dirObj = LittleFS.open(dir);
+            File file = dirObj.openNextFile();
+            bool filesFound = false;
+            
+            while (file) {
+                filesFound = true;
+                String fileName = file.name();
+                if (fileName.startsWith("/")) {
+                    fileName = fileName.substring(1); // Remove leading slash
+                }
+                
+                if (file.isDirectory()) {
+                    USBSerial.printf("      DIR: %s\n", fileName.c_str());
+                } else {
+                    USBSerial.printf("      FILE: %s (%u bytes)\n", fileName.c_str(), file.size());
+                }
+                file = dirObj.openNextFile();
+            }
+            
+            if (!filesFound) {
+                USBSerial.println("      No files found");
+            }
+            
+        } else {
+            USBSerial.printf("  %s - MISSING\n", dir.c_str());
+        }
+    }
+    
+    // Check specific important files
+    USBSerial.println("\nImportant configuration files:");
+    String important[] = {
+        "/data/config/actions.json", 
+        "/config/actions.json",
+        "/data/config/components.json",
+        "/config/components.json"
+    };
+    
+    for (const String& path : important) {
+        if (LittleFS.exists(path)) {
+            File file = LittleFS.open(path, "r");
+            if (!file) {
+                USBSerial.printf("  %s - EXISTS but cannot be opened\n", path.c_str());
+                continue;
+            }
+            
+            size_t size = file.size();
+            USBSerial.printf("  %s - EXISTS (%u bytes)\n", path.c_str(), size);
+            
+            // Print file preview (first 200 chars)
+            if (size > 0) {
+                USBSerial.println("  --- File Content Preview: ---");
+                size_t previewLen = min(200, (int)size);
+                char preview[201] = {0};
+                size_t read = file.readBytes(preview, previewLen);
+                preview[read] = '\0';
+                USBSerial.println(preview);
+                USBSerial.println("  --- End Preview ---");
+                
+                // Check if it's valid JSON
+                if (path.endsWith(".json")) {
+                    file.seek(0); // Reset to beginning
+                    String content = file.readString();
+                    
+                    // Try to parse with DynamicJsonDocument
+                    USBSerial.println("  Checking JSON validity...");
+                    DynamicJsonDocument doc(4096);
+                    DeserializationError error = deserializeJson(doc, content);
+                    
+                    if (error) {
+                        USBSerial.printf("  JSON INVALID: %s\n", error.c_str());
+                    } else {
+                        USBSerial.println("  JSON is valid");
+                        
+                        // For actions.json, check layer-config
+                        if (path.endsWith("actions.json")) {
+                            if (doc.containsKey("actions") && doc["actions"].containsKey("layer-config")) {
+                                JsonObject layerConfig = doc["actions"]["layer-config"];
+                                int buttonCount = 0;
+                                for (JsonPair p : layerConfig) {
+                                    buttonCount++;
+                                }
+                                USBSerial.printf("  Contains layer-config with %d button configurations\n", buttonCount);
+                            } else {
+                                USBSerial.println("  WARNING: Missing actions or layer-config structure!");
+                            }
+                        }
+                    }
+                }
+            } else {
+                USBSerial.println("  File is empty!");
+            }
+            file.close();
+        } else {
+            USBSerial.printf("  %s - MISSING\n", path.c_str());
+        }
+    }
+    
+    USBSerial.println("==== END DIAGNOSTICS ====\n");
+}
+
 void setup() {
     // Initialize USB in Serial mode
     USB.begin();
@@ -562,6 +819,15 @@ void setup() {
     USBSerial.println(TAG);
     USBSerial.println("Starting device initialization");
     
+    // Print memory diagnostics at startup
+    USBSerial.printf("Initial free heap: %d bytes\n", ESP.getFreeHeap());
+    USBSerial.printf("Total heap size: %d bytes\n", ESP.getHeapSize());
+    
+    #ifdef BOARD_HAS_PSRAM
+    USBSerial.printf("PSRAM size: %d bytes\n", ESP.getPsramSize());
+    USBSerial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
+    #endif
+    
     // Initialize HID components
     ConsumerControl.begin();
     USBSerial.println("HID Consumer Control initialized");
@@ -571,9 +837,8 @@ void setup() {
     if (FileSystemUtils::begin(true)) {
         USBSerial.println("LittleFS filesystem is operational");
         
-        // Create base directories
+        // Create only the necessary directories matching old firmware
         FileSystemUtils::createDirPath("/config");
-        FileSystemUtils::createDirPath("/data/config");
         FileSystemUtils::createDirPath("/web");
         FileSystemUtils::createDirPath("/macros");
         
@@ -719,6 +984,12 @@ void loop() {
             LittleFS.format();
             USBSerial.println("LittleFS formatted. Restarting...");
             ESP.restart();
+        } else if (command == "dumpactions") {
+            dumpActionsFile();
+        } else if (command == "fixactions") {
+            createWorkingActionsFile();
+        } else if (command == "fsdiag") {
+            runFilesystemDiagnostics();
         } else if (command == "help") {
             USBSerial.println("\nAvailable commands:");
             USBSerial.println("  diagnostics - Run all filesystem tests in sequence");
@@ -728,6 +999,9 @@ void loop() {
             USBSerial.println("  filenametest - Test filename restrictions");
             USBSerial.println("  fragtest - Test for filesystem fragmentation");
             USBSerial.println("  format - Format LittleFS filesystem (Warning: Deletes all files!)");
+            USBSerial.println("  dumpactions - Dump the contents of actions.json file");
+            USBSerial.println("  fixactions - Create a working actions.json file with default button mappings");
+            USBSerial.println("  fsdiag - Run detailed filesystem diagnostics");
             USBSerial.println("  help - Show this help message");
         }
     }

@@ -155,6 +155,25 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
     uint8_t totalKeys = componentPositions.size();
     
     USBSerial.printf("Loading key configuration for %d keys to the default layer\n", totalKeys);
+    USBSerial.println("==== BUTTON CONFIG DEBUG ====");
+    USBSerial.printf("Actions map contains %d entries\n", actions.size());
+    
+    // Debug: Print all action entries
+    for (const auto& entry : actions) {
+        USBSerial.printf("Action found: ID=%s, Type=%s\n", 
+                     entry.first.c_str(), 
+                     entry.second.type.c_str());
+    }
+    
+    // Debug: Print all component positions
+    USBSerial.println("Component positions in matrix:");
+    for (size_t i = 0; i < componentPositions.size(); i++) {
+        USBSerial.printf("Position %d: ID=%s, row=%d, col=%d\n", 
+                     i, 
+                     componentPositions[i].id.c_str(),
+                     componentPositions[i].row,
+                     componentPositions[i].col);
+    }
     
     // Load configuration to default layer
     loadLayerConfiguration("default", actions);
@@ -167,10 +186,15 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
     // Apply current layer configuration to actionMap
     if (layerConfigs.find(currentLayer) != layerConfigs.end()) {
         std::map<String, KeyConfig>& configs = layerConfigs[currentLayer];
+        USBSerial.printf("Current layer '%s' has %d configurations\n", 
+                     currentLayer.c_str(), configs.size());
+        
         for (size_t i = 0; i < componentPositions.size(); i++) {
             String componentId = componentPositions[i].id;
             if (configs.find(componentId) != configs.end()) {
                 actionMap[i] = configs[componentId];
+                USBSerial.printf("Configured button %s (index %d) with action type %d\n",
+                             componentId.c_str(), i, actionMap[i].type);
             } else {
                 // Clear configuration if not found in layer
                 actionMap[i].type = ACTION_NONE;
@@ -178,6 +202,8 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
                 memset(actionMap[i].consumerReport, 0, sizeof(actionMap[i].consumerReport));
                 actionMap[i].macroId = "";
                 actionMap[i].targetLayer = "";
+                USBSerial.printf("NO CONFIGURATION found for button %s (index %d)\n",
+                             componentId.c_str(), i);
             }
         }
     } else {
@@ -342,7 +368,13 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             
         case ACTION_NONE:
         default:
-            USBSerial.printf("No action configured for key %d\n", keyIndex);
+            USBSerial.printf("No action configured for component '%s' (key index %d)\n", 
+                           pos.id.c_str(), keyIndex);
+            // Print a hint for encoder button press issues
+            if (pos.id.startsWith("encoder-")) {
+                USBSerial.printf("Note: For encoder buttons, check that a corresponding 'button-%s' action is defined\n", 
+                               pos.id.substring(pos.id.indexOf('-')+1).c_str());
+            }
             break;
     }
 }
@@ -412,6 +444,8 @@ bool KeyHandler::loadLayerConfiguration(const String& layerName, const std::map<
     // Create a new layer configuration
     std::map<String, KeyConfig> configs;
     
+    USBSerial.printf("Loading layer configuration for '%s'\n", layerName.c_str());
+    
     // Process each action and store in the layer
     for (const auto& actionPair : actions) {
         const String& componentId = actionPair.first;
@@ -446,6 +480,7 @@ bool KeyHandler::loadLayerConfiguration(const String& layerName, const std::map<
         
         // Store the key configuration
         configs[componentId] = keyConfig;
+        USBSerial.printf("  Added configuration for '%s' (type: %d)\n", componentId.c_str(), keyConfig.type);
     }
     
     // Store the layer configuration
@@ -457,6 +492,9 @@ bool KeyHandler::loadLayerConfiguration(const String& layerName, const std::map<
             String componentId = componentPositions[i].id;
             if (configs.find(componentId) != configs.end()) {
                 actionMap[i] = configs[componentId];
+                USBSerial.printf("  Applied config for '%s' to index %d\n", componentId.c_str(), i);
+            } else {
+                USBSerial.printf("  WARNING: No config for '%s' at index %d\n", componentId.c_str(), i);
             }
         }
     }
