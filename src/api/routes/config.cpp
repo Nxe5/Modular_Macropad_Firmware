@@ -1,14 +1,14 @@
 #include <ESPAsyncWebServer.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 
 void handleGetReportsConfig(AsyncWebServerRequest *request) {
-  if (!SPIFFS.exists("/data/config/reports.json")) {
+  if (!LittleFS.exists("/config/reports.json")) {
     request->send(404, "application/json", "{\"error\":\"Reports config not found\"}");
     return;
   }
 
-  File file = SPIFFS.open("/data/config/reports.json", "r");
+  File file = LittleFS.open("/config/reports.json", "r");
   if (!file) {
     request->send(500, "application/json", "{\"error\":\"Failed to open reports config\"}");
     return;
@@ -21,12 +21,12 @@ void handleGetReportsConfig(AsyncWebServerRequest *request) {
 }
 
 void handleGetActionsConfig(AsyncWebServerRequest *request) {
-  if (!SPIFFS.exists("/data/config/actions.json")) {
+  if (!LittleFS.exists("/config/actions.json")) {
     request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
     return;
   }
 
-  File file = SPIFFS.open("/data/config/actions.json", "r");
+  File file = LittleFS.open("/config/actions.json", "r");
   if (!file) {
     request->send(500, "application/json", "{\"error\":\"Failed to open actions config\"}");
     return;
@@ -51,13 +51,13 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
     return;
   }
 
-  if (!SPIFFS.exists("/data/config/actions.json")) {
-    request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
+  if (!LittleFS.exists("/config/actions.json")) {
+    request->send(404, "application/json", "{\"error\":\"Actions config file not found\"}");
     return;
   }
 
   // Read current actions config
-  File file = SPIFFS.open("/data/config/actions.json", "r");
+  File file = LittleFS.open("/config/actions.json", "r");
   if (!file) {
     request->send(500, "application/json", "{\"error\":\"Failed to open actions config\"}");
     return;
@@ -104,7 +104,7 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
   }
 
   // Write the updated config back to the file
-  file = SPIFFS.open("/data/config/actions.json", "w");
+  file = LittleFS.open("/config/actions.json", "w");
   if (!file) {
     request->send(500, "application/json", "{\"error\":\"Failed to write actions config\"}");
     return;

@@ -4,7 +4,7 @@
 #include "HIDHandler.h"
 #include "MacroHandler.h"
 #include "ConfigManager.h"
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <USBCDC.h>
 #include <algorithm> // For std::sort
@@ -476,56 +476,49 @@ std::vector<String> KeyHandler::getAvailableLayers() const {
     return layers;
 }
 
-void KeyHandler::saveCurrentLayer() {
-    DynamicJsonDocument doc(1024);
+bool KeyHandler::saveCurrentLayer() {
+    DynamicJsonDocument doc(256);
     doc["current_layer"] = currentLayer;
     
-    File file = SPIFFS.open("/config/current_layer.json", "w");
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    
+    File file = LittleFS.open("/config/current_layer.json", "w");
     if (file) {
-        serializeJson(doc, file);
+        size_t bytesWritten = file.print(jsonStr);
         file.close();
-        USBSerial.printf("Current layer '%s' saved to SPIFFS\n", currentLayer.c_str());
+        USBSerial.printf("Current layer '%s' saved to LittleFS\n", currentLayer.c_str());
+        return bytesWritten == jsonStr.length();
     } else {
-        USBSerial.println("Failed to save current layer to SPIFFS");
+        USBSerial.println("Failed to save current layer to LittleFS");
+        return false;
     }
 }
 
 bool KeyHandler::loadCurrentLayer() {
-    if (!SPIFFS.exists("/config/current_layer.json")) {
-        USBSerial.println("No saved layer found, using default");
+    if (!LittleFS.exists("/config/current_layer.json")) {
+        currentLayer = "default";
         return false;
     }
     
-    File file = SPIFFS.open("/config/current_layer.json", "r");
-    if (!file) {
-        USBSerial.println("Failed to open layer file");
-        return false;
+    File file = LittleFS.open("/config/current_layer.json", "r");
+    if (file) {
+        String jsonStr = file.readString();
+        file.close();
+        
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, jsonStr);
+        
+        if (!error && doc.containsKey("current_layer")) {
+            currentLayer = doc["current_layer"].as<String>();
+            USBSerial.printf("Loaded current layer: %s\n", currentLayer.c_str());
+            return true;
+        }
     }
     
-    DynamicJsonDocument doc(1024);
-    DeserializationError error = deserializeJson(doc, file);
-    file.close();
-    
-    if (error) {
-        USBSerial.printf("Failed to parse layer file: %s\n", error.c_str());
-        return false;
-    }
-    
-    String savedLayer = doc["current_layer"].as<String>();
-    if (savedLayer.isEmpty()) {
-        USBSerial.println("No layer specified in file");
-        return false;
-    }
-    
-    // Only switch if the layer is available
-    if (isLayerAvailable(savedLayer)) {
-        currentLayer = savedLayer;
-        USBSerial.printf("Loaded saved layer: %s\n", currentLayer.c_str());
-        return true;
-    } else {
-        USBSerial.printf("Saved layer '%s' not available\n", savedLayer.c_str());
-        return false;
-    }
+    // Default to default layer if loading fails
+    currentLayer = "default";
+    return false;
 }
 
 void KeyHandler::setCpuFrequencyMhz(uint8_t mhz) {

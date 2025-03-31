@@ -18,7 +18,7 @@ This documentation explains the firmware code for the Modular Macropad, written 
 ### Key Differences from JavaScript
 - **Memory Management**: Manual memory management vs JavaScript's garbage collection
 - **Concurrency**: FreeRTOS tasks vs JavaScript's event loop
-- **File System**: SPIFFS vs Node.js fs module
+- **File System**: LittleFS vs Node.js fs module
 - **Type System**: Static typing vs JavaScript's dynamic typing
 
 ## Architecture
@@ -155,7 +155,7 @@ Manages JSON configuration files using ArduinoJson library.
 ```cpp
 // C++ Implementation
 bool ConfigManager::loadConfig(const char* filename) {
-    File file = SPIFFS.open(filename, "r");
+    File file = LittleFS.open(filename, "r");
     if (!file) return false;
     
     StaticJsonDocument<2048> doc;
@@ -182,7 +182,7 @@ class ConfigManager {
 
 ## Configuration System
 
-The firmware uses JSON configuration files stored in SPIFFS (SPI Flash File System):
+The firmware uses JSON configuration files stored in LittleFS (Little Flash File System):
 
 1. **actions.json**: Defines key bindings and macros
 2. **components.json**: Defines hardware components
@@ -248,7 +248,7 @@ The firmware provides a REST API for configuration:
 ```cpp
 // C++ API Handler
 void handleGetActionsConfig(AsyncWebServerRequest *request) {
-    File file = SPIFFS.open("/data/config/actions.json", "r");
+    File file = LittleFS.open("/data/config/actions.json", "r");
     String content = file.readString();
     file.close();
     request->send(200, "application/json", content);

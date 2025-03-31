@@ -21,7 +21,6 @@ public:
     static void setupWiFi();
     static void setupWebServer();
     static void setupWebSocket();
-    static void setupAPIEndpoints();
     
     // Event handlers
     static void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, 

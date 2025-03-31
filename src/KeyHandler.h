@@ -59,6 +59,8 @@ public:
     bool loadLayerConfiguration(const String& layerName, const std::map<String, ActionConfig>& actions);
     bool isLayerAvailable(const String& layerName) const;
     std::vector<String> getAvailableLayers() const;
+    bool saveCurrentLayer();
+    bool loadCurrentLayer();
     
     // Add these function declarations:
     void setCpuFrequencyMhz(uint8_t mhz);
@@ -92,8 +94,6 @@ private:
     // Layer management
     String currentLayer = "default";
     std::map<String, std::map<String, KeyConfig>> layerConfigs; // Layer -> ComponentID -> Config
-    void saveCurrentLayer();
-    bool loadCurrentLayer();
     
     // Direct position mapping
     struct ComponentPosition {

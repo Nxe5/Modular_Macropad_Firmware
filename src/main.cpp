@@ -30,178 +30,6 @@
 // Forward declarations for Display functions
 extern void updateDisplay();
 
-// Forward declaration for USBSerial before it's used in the diagnostic functions
-extern USBCDC USBSerial;
-
-// Filesystem Diagnostics functions for troubleshooting
-// Global state for diagnostics
-bool diagnosticsEnabled = false;
-unsigned long lastDiagnosticTime = 0;
-uint8_t currentTest = 0;
-bool testCompleted = false;
-
-// Check available storage space in filesystem
-void checkStorage() {
-    size_t totalBytes = LittleFS.totalBytes();
-    size_t usedBytes = LittleFS.usedBytes();
-    size_t freeBytes = totalBytes - usedBytes;
-    
-    USBSerial.printf("LittleFS: %u total bytes, %u used bytes, %u free bytes\n", 
-                    totalBytes, usedBytes, freeBytes);
-    USBSerial.printf("Storage usage: %.1f%%\n", (float)usedBytes * 100 / totalBytes);
-    
-    if (freeBytes < 50000) {  // Warn if less than 50KB free
-        USBSerial.println("WARNING: Low storage space on LittleFS!");
-    }
-}
-
-// Test if path length is an issue
-void testPathLength() {
-    USBSerial.println("Testing path length limitations...");
-    
-    // Test with short path
-    File shortPath = LittleFS.open("/test_short.txt", "w");
-    if (!shortPath) {
-        USBSerial.println("Failed to create short path file");
-    } else {
-        shortPath.println("test");
-        shortPath.close();
-        USBSerial.println("Short path file created successfully");
-        LittleFS.remove("/test_short.txt");
-    }
-    
-    // Test with path similar to the problematic ones
-    File longPath = LittleFS.open("/web/_app/immutable/nodes/test_long.js", "w");
-    if (!longPath) {
-        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
-    } else {
-        longPath.println("test");
-        longPath.close();
-        USBSerial.println("Long path file created successfully");
-        LittleFS.remove("/web/_app/immutable/nodes/test_long.js");
-    }
-}
-
-// Test if filename restrictions are an issue
-void testFilenames() {
-    USBSerial.println("Testing filename restrictions...");
-    
-    // Test with simple filename
-    File simpleFile = LittleFS.open("/simple.js", "w");
-    if (!simpleFile) {
-        USBSerial.println("Failed to create simple filename");
-    } else {
-        simpleFile.close();
-        USBSerial.println("Simple filename works");
-        LittleFS.remove("/simple.js");
-    }
-    
-    // Test with hash-based filename (similar to SvelteKit output)
-    File hashFile = LittleFS.open("/test.DWAvjrHy.js", "w");
-    if (!hashFile) {
-        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
-    } else {
-        hashFile.close();
-        USBSerial.println("Hash-based filename works");
-        LittleFS.remove("/test.DWAvjrHy.js");
-    }
-}
-
-// Test for fragmentation by writing and deleting files
-void testFragmentation() {
-    USBSerial.println("Testing for fragmentation issues...");
-    
-    // Create a set of small files
-    for (int i = 0; i < 10; i++) {
-        String filename = "/frag_test_" + String(i) + ".txt";
-        File f = LittleFS.open(filename, "w");
-        if (f) {
-            // Write 1KB of data
-            for (int j = 0; j < 20; j++) {
-                f.println("This is test data for fragmentation testing. Line " + String(j));
-            }
-            f.close();
-        } else {
-            USBSerial.println("Failed to create test file - possible FRAGMENTATION ISSUE");
-            break;
-        }
-    }
-    
-    // Try to create one larger file (50KB)
-    File largeFile = LittleFS.open("/large_test.bin", "w");
-    if (largeFile) {
-        char buffer[1024];
-        memset(buffer, 'A', sizeof(buffer));
-        
-        bool writeSuccess = true;
-        for (int i = 0; i < 50; i++) {
-            if (largeFile.write((uint8_t*)buffer, sizeof(buffer)) != sizeof(buffer)) {
-                USBSerial.println("Failed to write large file block - FRAGMENTATION ISSUE CONFIRMED");
-                writeSuccess = false;
-                break;
-            }
-        }
-        
-        largeFile.close();
-        
-        if (writeSuccess) {
-            USBSerial.println("Successfully wrote large file - fragmentation not detected");
-        }
-        
-        LittleFS.remove("/large_test.bin");
-    } else {
-        USBSerial.println("Failed to create large test file - possible FRAGMENTATION ISSUE");
-    }
-    
-    // Clean up test files
-    for (int i = 0; i < 10; i++) {
-        String filename = "/frag_test_" + String(i) + ".txt";
-        LittleFS.remove(filename);
-    }
-}
-
-// Run diagnostics sequentially
-void runDiagnostics() {
-    if (!diagnosticsEnabled || millis() - lastDiagnosticTime < 5000) {
-        return;
-    }
-    
-    lastDiagnosticTime = millis();
-    
-    switch (currentTest) {
-        case 0:
-            USBSerial.println("\n--- LittleFS DIAGNOSTICS: STORAGE CHECK ---");
-            checkStorage();
-            currentTest++;
-            break;
-            
-        case 1:
-            USBSerial.println("\n--- LittleFS DIAGNOSTICS: PATH LENGTH TEST ---");
-            testPathLength();
-            currentTest++;
-            break;
-            
-        case 2:
-            USBSerial.println("\n--- LittleFS DIAGNOSTICS: FILENAME TEST ---");
-            testFilenames();
-            currentTest++;
-            break;
-            
-        case 3:
-            USBSerial.println("\n--- LittleFS DIAGNOSTICS: FRAGMENTATION TEST ---");
-            testFragmentation();
-            currentTest++;
-            break;
-            
-        default:
-            if (!testCompleted) {
-                USBSerial.println("\n--- LittleFS DIAGNOSTICS COMPLETE ---");
-                testCompleted = true;
-            }
-            break;
-    }
-}
-
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
 USBHIDMouse Mouse;  // Optional if you need mouse controls
@@ -492,37 +320,45 @@ void setup() {
     ConsumerControl.begin();
     USBSerial.println("HID Consumer Control initialized");
     
-    // Mount LittleFS for configuration files
-    if (!LittleFS.begin(true)) {
-        USBSerial.println("Failed to mount LittleFS");
+    // Mount LittleFS for configuration files with more robust initialization
+    if (!LittleFS.begin(false)) {  // First try without formatting
+        USBSerial.println("Failed to mount LittleFS, attempting to format...");
+        if (!LittleFS.format()) {
+            USBSerial.println("LittleFS format failed");
+        } else {
+            USBSerial.println("LittleFS formatted successfully, remounting...");
+            if (!LittleFS.begin()) {
+                USBSerial.println("Failed to mount LittleFS after formatting");
+            } else {
+                USBSerial.println("LittleFS mounted successfully after formatting");
+            }
+        }
     } else {
         USBSerial.println("LittleFS mounted successfully");
-        
-        // Create config directory if it doesn't exist
-        if (!LittleFS.exists("/config")) {
-            if (LittleFS.mkdir("/config")) {
-                USBSerial.println("Created /config directory");
-            } else {
-                USBSerial.println("Failed to create /config directory");
-            }
+    }
+    
+    // Create necessary directories if they don't exist
+    if (!LittleFS.exists("/config")) {
+        if (LittleFS.mkdir("/config")) {
+            USBSerial.println("Created /config directory");
+        } else {
+            USBSerial.println("Failed to create /config directory");
         }
-        
-        // Create web directory if it doesn't exist
-        if (!LittleFS.exists("/web")) {
-            if (LittleFS.mkdir("/web")) {
-                USBSerial.println("Created /web directory");
-            } else {
-                USBSerial.println("Failed to create /web directory");
-            }
+    }
+    
+    if (!LittleFS.exists("/web")) {
+        if (LittleFS.mkdir("/web")) {
+            USBSerial.println("Created /web directory");
+        } else {
+            USBSerial.println("Failed to create /web directory");
         }
-        
-        // Create macros directory if it doesn't exist
-        if (!LittleFS.exists("/macros")) {
-            if (LittleFS.mkdir("/macros")) {
-                USBSerial.println("Created /macros directory");
-            } else {
-                USBSerial.println("Failed to create /macros directory");
-            }
+    }
+    
+    if (!LittleFS.exists("/macros")) {
+        if (LittleFS.mkdir("/macros")) {
+            USBSerial.println("Created /macros directory");
+        } else {
+            USBSerial.println("Failed to create /macros directory");
         }
     }
     

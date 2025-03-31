@@ -6,7 +6,7 @@
 #include <vector>
 #include <map>
 #include <string>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include "HIDHandler.h"
 
 // Path constants

@@ -2,19 +2,19 @@
 #include "ModuleSetup.h"
 #include <ArduinoJson.h>
 #include "FS.h"
-#include "SPIFFS.h"
+#include "LittleFS.h"
 
 ModuleCapabilities currentModule;
 ModuleInfo moduleInfo;
 
-// Function to read a JSON file from SPIFFS
+// Function to read a JSON file from LittleFS
 String readJsonFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
+    if (!LittleFS.exists(filePath)) {
         Serial.printf("File not found: %s\n", filePath);
         return "";
     }
     
-    File file = SPIFFS.open(filePath, "r");
+    File file = LittleFS.open(filePath, "r");
     if (!file) {
         Serial.printf("Failed to open file: %s\n", filePath);
         return "";
@@ -25,9 +25,9 @@ String readJsonFile(const char* filePath) {
     return content;
 }
 
-// Function to write a JSON file to SPIFFS
+// Function to write a JSON file to LittleFS
 bool writeJsonFile(const char* filePath, const String& content) {
-    File file = SPIFFS.open(filePath, "w");
+    File file = LittleFS.open(filePath, "w");
     if (!file) {
         Serial.printf("Failed to create file: %s\n", filePath);
         return false;
@@ -181,8 +181,16 @@ bool mergeConfigFiles() {
     String configJson;
     serializeJsonPretty(configDoc, configJson);
     
+    // Create the directory if it doesn't exist
+    if (!LittleFS.exists("/config")) {
+        if (!LittleFS.mkdir("/config")) {
+            Serial.println("Failed to create /config directory");
+            return false;
+        }
+    }
+    
     // Save to config.json
-    return writeJsonFile("/data/config/config.json", configJson);
+    return writeJsonFile("/config/config.json", configJson);
 }
 
 ModuleCapabilities getModuleCapabilities() {

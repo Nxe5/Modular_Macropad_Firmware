@@ -24,7 +24,7 @@ An ESP32-based firmware for modular mechanical keyboard macropads with RGB LEDs.
 2. Open the project in PlatformIO or Arduino IDE
 3. Adjust configuration for your specific hardware in `src/ModuleSetup.h`
 4. Build and upload the firmware
-5. Upload web interface files to SPIFFS (see below)
+5. Upload web interface files to LittleFS (see below)
 
 ### Uploading Web Interface Files
 
@@ -53,7 +53,7 @@ The web interface allows you to:
 
 ## Configuration
 
-The firmware uses JSON configuration files stored in the ESP32's SPIFFS file system:
+The firmware uses JSON configuration files stored in the ESP32's LittleFS file system:
 
 - `/config/LEDs.json` - LED configuration
 - `/config/keys.json` - Key mapping configuration
