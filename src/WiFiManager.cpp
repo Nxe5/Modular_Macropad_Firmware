@@ -1,4 +1,5 @@
 #include "WiFiManager.h"
+#include "WebServerManager.h"
 #include "LEDHandler.h"
 #include "KeyHandler.h"
 #include "DisplayHandler.h"
@@ -8,7 +9,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ESPmDNS.h>
 #include "config.h"
 
@@ -21,7 +22,7 @@ extern KeyHandler* keyHandler;
 extern MacroHandler* macroHandler;
 
 // Static member initialization
-String WiFiManager::_ssid = "MacroPad";
+String WiFiManager::_ssid = "ModularMacropad";
 String WiFiManager::_password = "macropad123";
 bool WiFiManager::_apMode = true;
 AsyncWebServer WiFiManager::_server(80);
@@ -32,10 +33,23 @@ uint32_t WiFiManager::_connectAttemptStart = 0;
 
 // Constants
 const uint32_t WiFiManager::STATUS_BROADCAST_INTERVAL = 5000; // Increased from original value
-const uint32_t WiFiManager::CONNECT_TIMEOUT = 30000; // 30 seconds
+const uint32_t WiFiManager::CONNECT_TIMEOUT = 15000; // 15 seconds
+
+// Static WebServerManager instance
+static WebServerManager* webServerManager = nullptr;
+
+// Forward declaration of external functions
+extern void initializeLED();
+extern void resetToDefaults();
 
 void WiFiManager::begin() {
-    // Load WiFi config from SPIFFS
+    // Initialize file system
+    if (!LittleFS.begin(true)) {
+        USBSerial.println("An error occurred while mounting LittleFS");
+        return;
+    }
+    
+    // Load WiFi configuration
     loadWiFiConfig();
     
     // Setup WiFi
@@ -44,10 +58,20 @@ void WiFiManager::begin() {
     // Setup WebSocket
     setupWebSocket();
     
-    // Setup WebServer
-    setupWebServer();
+    // Initialize the WebServerManager
+    webServerManager = new WebServerManager(_server);
+    webServerManager->begin();
     
-    USBSerial.println("WiFi Manager initialized");
+    // Configure for SvelteKit
+    webServerManager->configureSvelteKit("/web");
+    
+    // Setup API endpoints
+    setupAPIEndpoints();
+    
+    // Start the server
+    _server.begin();
+    
+    USBSerial.println("Web server started");
 }
 
 void WiFiManager::setupWiFi() {
@@ -113,1170 +137,108 @@ void WiFiManager::setupWebSocket() {
     USBSerial.println("WebSocket server initialized");
 }
 
-void WiFiManager::setupWebServer() {
-    // Serve static files from SPIFFS
-    _server.serveStatic("/", SPIFFS, "/web/").setDefaultFile("index.html");
-    
-    // Serve CSS file
-    _server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/web/style.css", "text/css");
-    });
-    
-    // Serve assets files
-    _server.serveStatic("/assets/", SPIFFS, "/web/assets/");
-    
-    // Add a catch-all handler for JavaScript files to ensure proper MIME type
-    _server.on("/*", HTTP_GET, [](AsyncWebServerRequest *request) {
-        String path = request->url();
+void WiFiManager::setupAPIEndpoints() {
+    if (webServerManager) {
+        webServerManager->setupAPIEndpoints();
         
-        // Check if this is a JS file
-        if (path.endsWith(".js")) {
-            USBSerial.printf("Serving JS file: %s\n", path.c_str());
-            
-            // Remove leading slash for SPIFFS path
-            if (path.startsWith("/")) {
-                path = path.substring(1);
-            }
-            
-            String fullPath = "/web/" + path;
-            USBSerial.printf("Full path: %s\n", fullPath.c_str());
-            
-            if (SPIFFS.exists(fullPath)) {
-                USBSerial.printf("File found, serving with proper MIME type\n");
-                request->send(SPIFFS, fullPath, "application/javascript");
-                return;
-            } else {
-                USBSerial.printf("File not found: %s\n", fullPath.c_str());
-                request->send(404, "text/plain", "File Not Found");
-                return;
-            }
-        }
+        // Add custom API endpoints
+        webServerManager->addAPIEndpoint("config/led", [](AsyncWebServerRequest *request) {
+            String config = getLEDConfigJson();
+            request->send(200, "application/json", config);
+        });
         
-        // Check if this is a CSS file
-        if (path.endsWith(".css")) {
-            USBSerial.printf("Serving CSS file: %s\n", path.c_str());
-            
-            // Remove leading slash for SPIFFS path
-            if (path.startsWith("/")) {
-                path = path.substring(1);
+        // LED configuration update
+        _server.on("/api/config/led", HTTP_POST, 
+            [](AsyncWebServerRequest *request) {
+                request->send(200, "text/plain", "Configuration received");
+            },
+            NULL,
+            [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+                String json = String((char*)data, len);
+                bool success = updateLEDConfigFromJson(json);
+                if (success) {
+                    saveLEDConfig();
+                    USBSerial.println("LED configuration reloaded");
+                    initializeLED();
+                }
             }
-            
-            String fullPath = "/web/" + path;
-            USBSerial.printf("Full path: %s\n", fullPath.c_str());
-            
-            if (SPIFFS.exists(fullPath)) {
-                USBSerial.printf("File found, serving with proper MIME type\n");
-                request->send(SPIFFS, fullPath, "text/css");
-                return;
-            } else {
-                USBSerial.printf("File not found: %s\n", fullPath.c_str());
-                request->send(404, "text/plain", "File Not Found");
-                return;
-            }
-        }
+        );
         
-        // Let the default handler take care of other file types
-        request->next();
-    });
-    
-    // API endpoints
-    
-    // LED Configuration
-    _server.on("/api/config/led", HTTP_GET, [](AsyncWebServerRequest *request) {
-        String config = getLEDConfigJson();
-        request->send(200, "application/json", config);
-    });
-    
-    _server.on("/api/config/led", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "text/plain", "Configuration received");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            String json = String((char*)data, len);
-            bool success = updateLEDConfigFromJson(json);
-            if (success) {
-                saveLEDConfig();
-                // Reload LED configuration
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-    
-    // WiFi Configuration
-    _server.on("/api/config/wifi", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(1024);
-        doc["ssid"] = WiFiManager::_ssid;
-        doc["password"] = ""; // Don't send the password for security
-        doc["ap_mode"] = WiFiManager::_apMode;
-        
-        String output;
-        serializeJson(doc, output);
-        request->send(200, "application/json", output);
-    });
-    
-    _server.on("/api/config/wifi", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "text/plain", "WiFi configuration received, restarting...");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            String json = String((char*)data, len);
+        // WiFi configuration
+        webServerManager->addAPIEndpoint("config/wifi", [](AsyncWebServerRequest *request) {
             DynamicJsonDocument doc(1024);
-            DeserializationError error = deserializeJson(doc, json);
+            doc["ssid"] = WiFiManager::_ssid;
+            doc["password"] = ""; // Don't send the password for security
+            doc["ap_mode"] = WiFiManager::_apMode;
             
-            if (!error) {
-                if (doc.containsKey("ssid")) {
-                    WiFiManager::_ssid = doc["ssid"].as<String>();
-                }
-                
-                if (doc.containsKey("password") && !doc["password"].as<String>().isEmpty()) {
-                    WiFiManager::_password = doc["password"].as<String>();
-                }
-                
-                if (doc.containsKey("ap_mode")) {
-                    WiFiManager::_apMode = doc["ap_mode"].as<bool>();
-                }
-                
-                WiFiManager::saveWiFiConfig();
-                
-                // Schedule restart after response sent
-                delay(1000);
-                ESP.restart();
-            }
-        }
-    );
-    
-    // System Status
-    _server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(1024);
-        doc["wifi"]["connected"] = WiFiManager::isConnected();
-        doc["wifi"]["ip"] = WiFiManager::getLocalIP().toString();
-        doc["wifi"]["ssid"] = WiFiManager::_ssid;
-        doc["wifi"]["ap_mode"] = WiFiManager::_apMode;
+            String output;
+            serializeJson(doc, output);
+            request->send(200, "application/json", output);
+        });
         
-        // Add more status info here as needed
-        
-        String output;
-        serializeJson(doc, output);
-        request->send(200, "application/json", output);
-    });
-    
-    // Reset to defaults
-    _server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
-        resetToDefaults();
-        request->send(200, "text/plain", "Reset to defaults complete. Restarting...");
-        
-        // Restart after sending response
-        delay(1000);
-        ESP.restart();
-    });
-    
-    // Config File API Endpoints
-    
-    // Get components.json config file
-    _server.on("/api/config/components", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/components.json", "application/json");
-    });
-    
-    // Update components.json config file
-    _server.on("/api/config/components", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing components config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
+        // WiFi configuration update
+        _server.on("/api/config/wifi", HTTP_POST, 
+            [](AsyncWebServerRequest *request) {
+                request->send(200, "text/plain", "WiFi configuration received, restarting...");
+            },
+            NULL,
+            [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+                String json = String((char*)data, len);
+                DynamicJsonDocument doc(1024);
+                DeserializationError error = deserializeJson(doc, json);
                 
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/components.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/components.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/components.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Components config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Components configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for components endpoint
-    _server.on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get actions.json config file
-    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/actions.json", "application/json");
-    });
-    
-    // Update actions.json config file
-    _server.on("/api/config/actions", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing actions config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Verify the JSON structure
-                if (!doc.containsKey("actions")) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Missing 'actions' key in JSON\"}";
-                    USBSerial.println("Missing 'actions' key in JSON");
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/actions.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Actions config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/actions.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open actions config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                // Write the serialized JSON string
-                if (!file.print(jsonString)) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write actions config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-                
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/actions.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify actions config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Verify the content is valid JSON
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Actions config verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Send success response
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Actions config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Actions configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for actions endpoint
-    _server.on("/api/config/actions", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get reports.json config file
-    _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/reports.json", "application/json");
-    });
-    
-    // Update reports.json config file
-    _server.on("/api/config/reports", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing reports config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/reports.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/reports.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write reports config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/reports.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Reports config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Reports configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for reports endpoint
-    _server.on("/api/config/reports", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/LEDs.json", "application/json");
-    });
-    
-    // Update LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing LEDs config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/LEDs.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/LEDs.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write LEDs config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/LEDs.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LEDs config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-                
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Key configuration reloaded");
-                }
-            }
-        }
-    );
-
-    // Add CORS preflight handler for LEDs endpoint
-    _server.on("/api/config/LEDs", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get info.json config file
-    _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/info.json", "application/json");
-    });
-    
-    // Update info.json config file
-    _server.on("/api/config/info", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing info config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!SPIFFS.exists("/config/info.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = SPIFFS.open("/config/info.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write info config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/info.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Info config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Key configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for info endpoint
-    _server.on("/api/config/info", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get macros list
-    _server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(4096);
-        JsonArray macroArray = doc.createNestedArray("macros");
-        
-        if (macroHandler) {
-            std::vector<String> macroIds = macroHandler->getAvailableMacros();
-            
-            for (const String& macroId : macroIds) {
-                Macro macro;
-                if (macroHandler->getMacro(macroId, macro)) {
-                    JsonObject macroObj = macroArray.createNestedObject();
-                    macroObj["id"] = macro.id;
-                    macroObj["name"] = macro.name;
-                    macroObj["description"] = macro.description;
-                    // Don't include commands for the listing
-                }
-            }
-        }
-        
-        String output;
-        serializeJson(doc, output);
-        request->send(200, "application/json", output);
-    });
-
-    // Get macros list (old endpoint for backwards compatibility)
-    _server.on("/api/config/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
-        // Scan the directory directly instead of using an index file
-        DynamicJsonDocument doc(4096);
-        JsonArray macroArray = doc.createNestedArray("macros");
-        
-        if (macroHandler) {
-            std::vector<String> macroIds = macroHandler->getAvailableMacros();
-            
-            for (const String& macroId : macroIds) {
-                Macro macro;
-                if (macroHandler->getMacro(macroId, macro)) {
-                    JsonObject macroObj = macroArray.createNestedObject();
-                    macroObj["id"] = macro.id;
-                    macroObj["name"] = macro.name;
-                    macroObj["description"] = macro.description;
-                }
-            }
-        }
-        
-        String output;
-        serializeJson(doc, output);
-        request->send(200, "application/json", output);
-    });
-
-    // Update macros configuration - now handled by the /api/macros endpoints
-    _server.on("/api/config/macros", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            // This endpoint is now deprecated, but we'll keep it for backward compatibility
-            request->send(200, "application/json", "{\"status\":\"warning\",\"message\":\"Using deprecated endpoint - please use /api/macros instead\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Process each macro in the JSON
-                if (doc.containsKey("macros")) {
-                    JsonArray macroArray = doc["macros"].as<JsonArray>();
-                    
-                    for (JsonObject macroJson : macroArray) {
-                        if (!macroJson.containsKey("id")) {
-                            continue; // Skip macros without ID
-                        }
-                        
-                        // Create a macro object
-                        Macro macro;
-                        if (macroHandler && macroHandler->parseMacroFromJson(macroJson, macro)) {
-                            macroHandler->saveMacro(macro);
-                        }
+                if (!error) {
+                    if (doc.containsKey("ssid")) {
+                        WiFiManager::_ssid = doc["ssid"].as<String>();
                     }
                     
-                    // Reload the configuration
-                    if (macroHandler) {
-                        macroHandler->loadMacros();
-                        USBSerial.println("Macros configuration reloaded");
+                    if (doc.containsKey("password") && !doc["password"].as<String>().isEmpty()) {
+                        WiFiManager::_password = doc["password"].as<String>();
                     }
                     
-                    // Success response
-                    request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Macros updated successfully\"}");
-                } else {
-                    request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid macro format - missing 'macros' key\"}");
-                }
-                
-                accumulatedData = ""; // Reset for next request
-            }
-        }
-    );
-
-    // Macro API Endpoints
-    
-    // Get a specific macro by ID
-    _server.on("/api/macros/^([a-zA-Z0-9_-]+)$", HTTP_GET, [](AsyncWebServerRequest *request) {
-        String macroId = request->pathArg(0);
-        
-        if (macroHandler) {
-            Macro macro;
-            if (macroHandler->getMacro(macroId, macro)) {
-                DynamicJsonDocument doc(8192);
-                JsonObject macroObj = doc.to<JsonObject>();
-                
-                macroObj["id"] = macro.id;
-                macroObj["name"] = macro.name;
-                macroObj["description"] = macro.description;
-                
-                JsonArray cmdsArray = macroObj.createNestedArray("commands");
-                for (const MacroCommand& cmd : macro.commands) {
-                    JsonObject cmdObj = cmdsArray.createNestedObject();
-                    
-                    // Format command based on type
-                    JsonArray reportArray;
-                    
-                    switch (cmd.type) {
-                        case MACRO_CMD_KEY_PRESS:
-                            cmdObj["type"] = "key_press";
-                            reportArray = cmdObj.createNestedArray("report");
-                            for (int i = 0; i < 8; i++) {
-                                reportArray.add(cmd.data.keyPress.report[i]);
-                            }
-                            break;
-                        
-                        case MACRO_CMD_KEY_DOWN:
-                            cmdObj["type"] = "key_down";
-                            reportArray = cmdObj.createNestedArray("report");
-                            for (int i = 0; i < 8; i++) {
-                                reportArray.add(cmd.data.keyPress.report[i]);
-                            }
-                            break;
-                            
-                        case MACRO_CMD_KEY_UP:
-                            cmdObj["type"] = "key_up";
-                            reportArray = cmdObj.createNestedArray("report");
-                            for (int i = 0; i < 8; i++) {
-                                reportArray.add(cmd.data.keyPress.report[i]);
-                            }
-                            break;
-                            
-                        case MACRO_CMD_TYPE_TEXT:
-                            cmdObj["type"] = "type_text";
-                            cmdObj["text"] = cmd.data.typeText.text;
-                            break;
-                            
-                        case MACRO_CMD_DELAY:
-                            cmdObj["type"] = "delay";
-                            cmdObj["milliseconds"] = cmd.data.delay.milliseconds;
-                            break;
-                            
-                        case MACRO_CMD_CONSUMER_PRESS:
-                            cmdObj["type"] = "consumer_press";
-                            reportArray = cmdObj.createNestedArray("report");
-                            for (int i = 0; i < 4; i++) {
-                                reportArray.add(cmd.data.consumerPress.report[i]);
-                            }
-                            break;
-                            
-                        case MACRO_CMD_EXECUTE_MACRO:
-                            cmdObj["type"] = "execute_macro";
-                            cmdObj["macroId"] = cmd.data.executeMacro.macroId;
-                            break;
+                    if (doc.containsKey("ap_mode")) {
+                        WiFiManager::_apMode = doc["ap_mode"].as<bool>();
                     }
+                    
+                    WiFiManager::saveWiFiConfig();
+                    
+                    // Schedule restart after response sent
+                    delay(1000);
+                    ESP.restart();
                 }
-                
-                String output;
-                serializeJson(doc, output);
-                request->send(200, "application/json", output);
-                return;
             }
-        }
+        );
         
-        request->send(404, "application/json", "{\"error\":\"Macro not found\"}");
-    });
-    
-    // Create or update a macro
-    _server.on("/api/macros", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            DynamicJsonDocument doc(8192);
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
-            
-            if (error) {
-                request->send(400, "application/json", 
-                             "{\"error\":\"JSON parsing failed: " + String(error.c_str()) + "\"}");
-                return;
-            }
-            
-            if (!macroHandler) {
-                request->send(500, "application/json", "{\"error\":\"MacroHandler not initialized\"}");
-                return;
-            }
-            
-            // Parse the macro from JSON
-            Macro macro;
-            if (macroHandler->parseMacroFromJson(doc.as<JsonObject>(), macro)) {
-                if (macroHandler->saveMacro(macro)) {
-                    request->send(200, "application/json", "{\"status\":\"ok\",\"id\":\"" + macro.id + "\"}");
-                } else {
-                    request->send(500, "application/json", "{\"error\":\"Failed to save macro\"}");
-                }
-            } else {
-                request->send(400, "application/json", "{\"error\":\"Invalid macro format\"}");
-            }
-        }
-    );
-    
-    // Delete a macro
-    _server.on("/api/macros/^([a-zA-Z0-9_-]+)$", HTTP_DELETE, [](AsyncWebServerRequest *request) {
-        String macroId = request->pathArg(0);
-        
-        if (macroHandler) {
-            if (macroHandler->deleteMacro(macroId)) {
-                request->send(200, "application/json", "{\"status\":\"ok\"}");
-                return;
-            }
-        }
-        
-        request->send(404, "application/json", "{\"error\":\"Macro not found\"}");
-    });
-    
-    // Layer API Endpoints
-    
-    // Get current layer and available layers
-    _server.on("/api/layers", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(4096);
-        
-        if (keyHandler) {
-            doc["current_layer"] = keyHandler->getCurrentLayer();
-            
-            JsonArray layersArray = doc.createNestedArray("available_layers");
-            std::vector<String> layers = keyHandler->getAvailableLayers();
-            for (const String& layer : layers) {
-                layersArray.add(layer);
-            }
-        } else {
-            doc["current_layer"] = "default";
-            JsonArray layersArray = doc.createNestedArray("available_layers");
-            layersArray.add("default");
-        }
-        
-        String output;
-        serializeJson(doc, output);
-        request->send(200, "application/json", output);
-    });
-    
-    // Switch to a different layer
-    _server.on("/api/layers/switch", HTTP_POST,
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+        // System status
+        webServerManager->addAPIEndpoint("status", [](AsyncWebServerRequest *request) {
             DynamicJsonDocument doc(1024);
-            DeserializationError error = deserializeJson(doc, (const char*)data, len);
+            doc["wifi"]["connected"] = WiFiManager::isConnected();
+            doc["wifi"]["ip"] = WiFiManager::getLocalIP().toString();
+            doc["wifi"]["ssid"] = WiFiManager::_ssid;
+            doc["wifi"]["ap_mode"] = WiFiManager::_apMode;
             
-            if (error) {
-                request->send(400, "application/json", 
-                             "{\"error\":\"JSON parsing failed: " + String(error.c_str()) + "\"}");
-                return;
-            }
+            // Add more status info here as needed
             
-            if (!doc.containsKey("layer")) {
-                request->send(400, "application/json", "{\"error\":\"Missing layer parameter\"}");
-                return;
-            }
+            String output;
+            serializeJson(doc, output);
+            request->send(200, "application/json", output);
+        });
+        
+        // Reset to defaults
+        _server.on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+            resetToDefaults();
+            request->send(200, "text/plain", "Reset to defaults complete. Restarting...");
             
-            String targetLayer = doc["layer"].as<String>();
-            
-            if (keyHandler) {
-                if (keyHandler->switchToLayer(targetLayer)) {
-                    request->send(200, "application/json", 
-                                 "{\"status\":\"ok\",\"layer\":\"" + targetLayer + "\"}");
-                } else {
-                    request->send(404, "application/json", 
-                                 "{\"error\":\"Layer not found: " + targetLayer + "\"}");
-                }
-            } else {
-                request->send(500, "application/json", "{\"error\":\"KeyHandler not initialized\"}");
-            }
-        }
-    );
-    
-    // 404 handler
-    _server.onNotFound([](AsyncWebServerRequest *request) {
-        request->send(404, "text/plain", "Not found");
-    });
-    
-    // Start server
-    _server.begin();
-    
-    USBSerial.println("Web server started");
+            // Restart after sending response
+            delay(1000);
+            ESP.restart();
+        });
+        
+        // Config files
+        _server.on("/api/config/components", HTTP_GET, [](AsyncWebServerRequest *request) {
+            webServerManager->serveGzippedFile(request, "/config/components.json", "application/json");
+        });
+    }
 }
 
 void WiFiManager::onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, 
@@ -1573,46 +535,56 @@ void WiFiManager::broadcastStatus() {
 }
 
 void WiFiManager::loadWiFiConfig() {
-    if (SPIFFS.exists("/config/wifi.json")) {
-        File file = SPIFFS.open("/config/wifi.json", "r");
-        if (file) {
-            String json = file.readString();
-            file.close();
-            
+    // Check if config file exists
+    if (LittleFS.exists("/config/wifi.json")) {
+        File configFile = LittleFS.open("/config/wifi.json", "r");
+        if (configFile) {
+            // Parse JSON
             DynamicJsonDocument doc(1024);
-            DeserializationError error = deserializeJson(doc, json);
+            DeserializationError error = deserializeJson(doc, configFile);
             
             if (!error) {
-                _ssid = doc["ssid"] | "MacroPad";
-                _password = doc["password"] | "macropad123";
-                _apMode = doc["ap_mode"] | true;
+                _ssid = doc["ssid"].as<String>();
+                _password = doc["password"].as<String>();
+                _apMode = doc["ap_mode"].as<bool>();
                 
-                USBSerial.println("WiFi configuration loaded");
+                USBSerial.println("Loaded WiFi configuration: ");
+                USBSerial.printf("SSID: %s, AP Mode: %s\n", 
+                              _ssid.c_str(), _apMode ? "true" : "false");
+            } else {
+                USBSerial.println("Failed to parse config file");
             }
+            
+            configFile.close();
         }
     } else {
-        USBSerial.println("WiFi config not found, using defaults");
-        saveWiFiConfig(); // Create the default config file
+        // Create default config if it doesn't exist
+        saveWiFiConfig();
     }
 }
 
 void WiFiManager::saveWiFiConfig() {
+    // Create JSON document
     DynamicJsonDocument doc(1024);
     doc["ssid"] = _ssid;
     doc["password"] = _password;
     doc["ap_mode"] = _apMode;
     
-    String json;
-    serializeJson(doc, json);
-    
-    File file = SPIFFS.open("/config/wifi.json", "w");
-    if (file) {
-        file.print(json);
-        file.close();
-        USBSerial.println("WiFi configuration saved");
-    } else {
-        USBSerial.println("Failed to save WiFi configuration");
+    // Open file for writing
+    File configFile = LittleFS.open("/config/wifi.json", "w");
+    if (!configFile) {
+        USBSerial.println("Failed to open config file for writing");
+        return;
     }
+    
+    // Serialize JSON to file
+    if (serializeJson(doc, configFile) == 0) {
+        USBSerial.println("Failed to write to config file");
+    } else {
+        USBSerial.println("WiFi configuration saved");
+    }
+    
+    configFile.close();
 }
 
 void WiFiManager::resetToDefaults() {
@@ -1624,9 +596,9 @@ void WiFiManager::resetToDefaults() {
     
     // Reset other configs as needed
     // e.g., copy default configs to active configs
-    if (SPIFFS.exists("/defaults/LEDs.json")) {
-        File srcFile = SPIFFS.open("/defaults/LEDs.json", "r");
-        File destFile = SPIFFS.open("/config/LEDs.json", "w");
+    if (LittleFS.exists("/defaults/LEDs.json")) {
+        File srcFile = LittleFS.open("/defaults/LEDs.json", "r");
+        File destFile = LittleFS.open("/config/LEDs.json", "w");
         
         if (srcFile && destFile) {
             uint8_t buffer[512];
@@ -1667,11 +639,11 @@ String serializedJson(const String& jsonStr) {
 // Helper function to lookup key names from reports
 String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) {
     // Load reports.json
-    if (!SPIFFS.exists("/config/reports.json")) {
+    if (!LittleFS.exists("/config/reports.json")) {
         return "Unknown";
     }
     
-    File file = SPIFFS.open("/config/reports.json", "r");
+    File file = LittleFS.open("/config/reports.json", "r");
     if (!file) {
         return "Error";
     }
