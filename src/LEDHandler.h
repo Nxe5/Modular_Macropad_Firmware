@@ -95,7 +95,7 @@ void updateLEDs();
 String getLEDConfigJson();
 bool updateLEDConfigFromJson(const String& json);
 bool saveLEDConfig();
-void createDefaultLEDConfig();
+String createDefaultLEDConfig();
 bool saveDefaultLEDConfig();
 void cleanupLED();
 

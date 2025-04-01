@@ -1,0 +1,78 @@
+{
+  "id": "",
+  "name": "Main_Module",
+  "version": "1.0.0",
+  "module-size": "1x1",
+  "author": "Nxe5",
+  "description": "The first configuration file for the main module of an ESP32 modular macropad.",
+  "gridSize": {
+    "rows": 5,
+    "columns": 5
+  },
+  "hardware": {
+    "matrix": {
+      "rows": [3, 5, 8, 9, 10],
+      "columns": [11, 21, 13, 6, 12]
+    }
+  },
+  "defaults": {
+    "button": {
+      "action": "press",
+      "debounceTime": 50
+    },
+    "encoder": {
+      "stepSize": 4,
+      "acceleration": true,
+      "actions": 
+        {
+          "clockwise": "",
+          "counterclockwise": "",
+          "buttonPress": ""
+        }
+    },
+    "display": {
+      "brightness": 80,
+      "orientation": 0,
+      "defaultContent": {
+        "text": "Hello World!",
+        "color": "0xFFFFFF",
+        "size": 2
+      }
+    },
+    "slider": {
+      "min": 0,
+      "max": 1023,
+      "defaultValue": 0,
+      "steps": 128
+    }
+  },
+  "settings": {
+    "backlightBrightness": 80,
+    "displayTimeout": 30000,
+    "defaultLayer": "layer-1",
+    "serialBaudRate": 115200,
+    "usbPollingRate": 1000
+  },
+  "supportedComponentTypes": {
+    "button": {
+      "validEffects": ["solid", "pulse", "breathe", "rainbow"],
+      "maxBrightness": 255
+    },
+    "encoder": {
+      "maxModes": 8,
+      "supportsButton": true
+    },
+    "display": {
+      "supportedSizes": [
+        { "rows": 2, "columns": 3 },
+        { "rows": 1, "columns": 2 }
+      ],
+      "maxBrightness": 255
+    },
+    "slider": {
+      "resolution": 10,
+      "supportsTouch": false
+    }
+  }
+}
+

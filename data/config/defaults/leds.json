@@ -1,0 +1,376 @@
+{
+  "leds": {
+    "layer-name": "default-led-layer",
+    "active": true,
+    "pin": 7,
+    "type": "sk6812",
+    "brightness": 9,
+    "animation": {
+      "active": false,
+      "mode": 0,
+      "speed": 100
+    },
+    "config": [
+      {
+        "id": "led-1",
+        "stream_address": 0,
+        "button_id": "button-1",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 0, "column": 3 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-2",
+        "stream_address": 1,
+        "button_id": "button-3",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 1, "column": 3 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-3",
+        "stream_address": 2,
+        "button_id": "button-2",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 1, "column": 4 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-4",
+        "stream_address": 3,
+        "button_id": "button-8",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 2, "column": 0 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-5",
+        "stream_address": 4,
+        "button_id": "button-7",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 2, "column": 1 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-6",
+        "stream_address": 5,
+        "button_id": "button-6",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 2, "column": 2 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-7",
+        "stream_address": 6,
+        "button_id": "button-5",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 2, "column": 3 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-8",
+        "stream_address": 7,
+        "button_id": "button-4",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 2, "column": 4 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-9",
+        "stream_address": 8,
+        "button_id": "button-9",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 3, "column": 0 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-10",
+        "stream_address": 9,
+        "button_id": "button-10",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 3, "column": 1 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-11",
+        "stream_address": 10,
+        "button_id": "button-11",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 3, "column": 2 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-12",
+        "stream_address": 11,
+        "button_id": "button-12",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 3, "column": 3 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-13",
+        "stream_address": 12,
+        "button_id": "button-13",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 3, "column": 4 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-14",
+        "stream_address": 13,
+        "button_id": "button-18",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 4, "column": 0 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-15",
+        "stream_address": 14,
+        "button_id": "button-17",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 4, "column": 1 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-16",
+        "stream_address": 15,
+        "button_id": "button-16",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 4, "column": 2 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-17",
+        "stream_address": 16,
+        "button_id": "button-15",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 4, "column": 3 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      },
+      {
+        "id": "led-18",
+        "stream_address": 17,
+        "button_id": "button-14",
+        "type": "sk6812",
+        "size": { "rows": 1, "columns": 1 },
+        "start_location": { "row": 4, "column": 4 },
+        "color": {
+          "r": 0,
+          "g": 255,
+          "b": 0
+        },
+        "pressed_color": {
+          "r": 255,
+          "g": 255,
+          "b": 255
+        },
+        "brightness": 255,
+        "mode": 0
+      }
+    ]
+  }
+}

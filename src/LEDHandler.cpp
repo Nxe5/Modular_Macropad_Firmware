@@ -55,7 +55,7 @@ void initializeLED(uint8_t numLEDsToInit, uint8_t ledPin, uint8_t brightness) {
             numLEDs = numLEDsToInit;
         } else {
             // Try to load LED configuration
-            String ledJson = readJsonFile("/config/LEDs.json");
+            String ledJson = readJsonFile("/config/leds.json");
             if (ledJson.isEmpty()) {
                 USBSerial.println("LED config not found, creating defaults");
                 
@@ -242,117 +242,108 @@ void initializeLED(uint8_t numLEDsToInit, uint8_t ledPin, uint8_t brightness) {
     }
 }
 
-void createDefaultLEDConfig() {
-    // Create LED configs array if not already created
-    if (!ledConfigs) {
-        ledConfigs = new LEDConfig[numLEDs];
-    }
+String createDefaultLEDConfig() {
+    // Generate a default LED configuration
+    USBSerial.println("Creating default LED configuration");
     
-    // Clear the button LED mapping
-    buttonLEDMap.clear();
+    // Create a default configuration with one LED
+    DynamicJsonDocument doc(1024);
     
-    // Initialize the LED strip
-    if (strip) {
-        strip->begin();
-        strip->setBrightness(50); // Default brightness
-        strip->clear();
-    }
+    // Set basic LED parameters
+    doc["leds"]["pin"] = DEFAULT_LED_PIN;
+    doc["leds"]["brightness"] = 30;
     
-    // Default all LEDs with distinctive colors
-    for (int i = 0; i < numLEDs; i++) {
-        // Default color: Green
-        ledConfigs[i].r = 0;
-        ledConfigs[i].g = 255;
-        ledConfigs[i].b = 0;
-        
-        // Pressed color: White
-        ledConfigs[i].pressedR = 255;
-        ledConfigs[i].pressedG = 255; 
-        ledConfigs[i].pressedB = 255;
-        
-        ledConfigs[i].brightness = 100; // Higher default brightness for visibility
-        ledConfigs[i].mode = LED_MODE_STATIC;
-        ledConfigs[i].needsUpdate = false; // Already applied
-        ledConfigs[i].isActive = false;
-        
-        // Default button ID
-        ledConfigs[i].buttonId = "button-" + String(i + 1);
-        
-        // Set up default button mapping
-        String buttonId = ledConfigs[i].buttonId;
-        auto it = buttonLEDMap.find(buttonId);
-        if (it != buttonLEDMap.end()) {
-            // Button already exists in map, add this LED
-            it->second.ledIndices.push_back(i);
-        } else {
-            // Create new button mapping
-            ButtonLEDMapping mapping;
-            mapping.buttonId = buttonId;
-            mapping.ledIndices.push_back(i);
-            mapping.defaultColor[0] = 0;
-            mapping.defaultColor[1] = 255;
-            mapping.defaultColor[2] = 0;
-            mapping.pressedColor[0] = 255;
-            mapping.pressedColor[1] = 255;
-            mapping.pressedColor[2] = 255;
-            
-            buttonLEDMap[buttonId] = mapping;
-        }
-        
-        // Set the LED to its default color immediately
-        if (strip) {
-            float factor = ledConfigs[i].brightness / 255.0;
-            strip->setPixelColor(i, strip->Color(
-                ledConfigs[i].r * factor,
-                ledConfigs[i].g * factor,
-                ledConfigs[i].b * factor
-            ));
-        }
-    }
+    // Create the animation settings object
+    doc["leds"]["animation"]["active"] = false;
+    doc["leds"]["animation"]["mode"] = 0;
+    doc["leds"]["animation"]["speed"] = 100;
     
-    // Apply changes
-    if (strip) {
-        strip->show();
-    }
+    // Create array for LED configurations
+    JsonArray ledsConfig = doc["leds"].createNestedArray("config");
     
-    USBSerial.println("Created default LED configuration with green LEDs");
+    // Add a default LED
+    JsonObject led = ledsConfig.createNestedObject();
+    led["id"] = "led-0";
+    led["stream_address"] = 0;
+    led["button_id"] = "button-0";
     
-    // Save this as the active configuration
-    saveLEDConfig();
+    JsonObject color = led.createNestedObject("color");
+    color["r"] = 0;
+    color["g"] = 255;
+    color["b"] = 0;
     
-    // Also save as default configuration
-    saveDefaultLEDConfig();
+    JsonObject pressedColor = led.createNestedObject("pressed_color");
+    pressedColor["r"] = 255;
+    pressedColor["g"] = 255;
+    pressedColor["b"] = 255;
+    
+    led["brightness"] = 30;
+    led["mode"] = 0;
+    
+    // Serialize to a string
+    String output;
+    serializeJsonPretty(doc, output);
+    
+    USBSerial.println("Created default LED configuration with green leds");
+    USBSerial.println(output);
+    
+    return output;
 }
 
 bool saveDefaultLEDConfig() {
-    // Make sure the defaults directory exists
-    if (!LittleFS.exists("/defaults")) {
-        if (!LittleFS.mkdir("/defaults")) {
-            USBSerial.println("Failed to create defaults directory");
-            return false;
-        }
+    DynamicJsonDocument doc(16384);
+    
+    // Create the basic structure
+    doc["leds"]["pin"] = DEFAULT_LED_PIN;
+    doc["leds"]["brightness"] = 30;
+    doc["leds"]["animation"]["active"] = false;
+    doc["leds"]["animation"]["mode"] = 0;
+    doc["leds"]["animation"]["speed"] = 100;
+    
+    // Create the LED configurations array
+    JsonArray ledsConfig = doc["leds"].createNestedArray("config");
+    
+    // Add each LED configuration
+    for (int i = 0; i < numLEDs; i++) {
+        JsonObject led = ledsConfig.createNestedObject();
+        led["id"] = ledConfigs[i].id.isEmpty() ? "led-" + String(i) : ledConfigs[i].id;
+        led["stream_address"] = ledConfigs[i].streamAddress;
+        led["button_id"] = ledConfigs[i].buttonId;
+        
+        JsonObject color = led.createNestedObject("color");
+        color["r"] = ledConfigs[i].r;
+        color["g"] = ledConfigs[i].g;
+        color["b"] = ledConfigs[i].b;
+        
+        JsonObject pressedColor = led.createNestedObject("pressed_color");
+        pressedColor["r"] = ledConfigs[i].pressedR;
+        pressedColor["g"] = ledConfigs[i].pressedG;
+        pressedColor["b"] = ledConfigs[i].pressedB;
+        
+        led["brightness"] = ledConfigs[i].brightness;
+        led["mode"] = ledConfigs[i].mode;
     }
     
-    // Get the current config JSON
-    String config = getLEDConfigJson();
+    // Serialize to JSON
+    String jsonString;
+    serializeJson(doc, jsonString);
     
-    // Save to defaults directory
-    File file = LittleFS.open("/defaults/LEDs.json", "w");
+    // Save the full configuration to the default file
+    File file = LittleFS.open("/config/defaults/leds.json", "w");
     if (!file) {
         USBSerial.println("Failed to open default LED config file for writing");
         return false;
     }
     
-    size_t bytesWritten = file.print(config);
-    file.close();
-    
-    if (bytesWritten == config.length()) {
-        USBSerial.println("Default LED configuration saved successfully");
-        return true;
-    } else {
-        USBSerial.println("Failed to save default LED configuration");
+    if (file.print(jsonString) != jsonString.length()) {
+        file.close();
+        USBSerial.println("Failed to write to default LED config file");
         return false;
     }
+    
+    file.close();
+    USBSerial.println("Default LED configuration saved");
+    return true;
 }
 
 void setGlobalBrightness(uint8_t brightness) {
@@ -1077,7 +1068,7 @@ bool saveLEDConfig() {
     }
     
     // Open the file for writing
-    File file = LittleFS.open("/config/LEDs.json", "w");
+    File file = LittleFS.open("/config/leds.json", "w");
     if (!file) {
         USBSerial.println("Failed to open LED config file for writing");
         return false;

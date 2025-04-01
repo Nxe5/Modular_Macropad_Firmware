@@ -1,10 +1,13 @@
 // ModuleSetup.cpp
 #include "ModuleSetup.h"
-#include <ArduinoJson.h>
-#include <USBCDC.h>
-#include "LittleFS.h"
-#include <vector>
 #include "FileSystemUtils.h"
+#include "LEDHandler.h"
+#include <LittleFS.h>
+#include <ArduinoJson.h>
+#include <USB.h>
+#include <vector>
+#include <map>
+#include <USBCDC.h>
 
 ModuleCapabilities currentModule;
 ModuleInfo moduleInfo;
@@ -48,23 +51,34 @@ String readJsonFile(const char* filePath) {
     return content;
 }
 
-// Add a new helper function for estimating JSON document size
-size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor = 1.4) {
-    // ArduinoJson typically needs buffer about 1-1.3x the size of the JSON string
-    // We use a 1.4x safety factor by default
-    size_t baseSize = jsonString.length();
-    size_t estimatedSize = baseSize * safetyFactor;
+// Estimate the required buffer size for a JSON document
+size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor) {
+    size_t len = jsonString.length();
     
-    // Round up to nearest higher power of 2 for better memory alignment
-    size_t powerOf2 = 256; // Start with minimum size
-    while (powerOf2 < estimatedSize) {
-        powerOf2 *= 2;
+    // Count the number of objects, arrays, and string literals to help with the estimate
+    int numObjects = 0;
+    int numArrays = 0;
+    int numStrings = 0;
+    
+    for (size_t i = 0; i < len; i++) {
+        char c = jsonString[i];
+        if (c == '{') numObjects++;
+        else if (c == '[') numArrays++;
+        else if (c == '"') numStrings++;
     }
     
-    USBSerial.printf("JSON size estimation: %u bytes string -> %u bytes buffer (rounded to %u)\n", 
-                     baseSize, (unsigned int)(baseSize * safetyFactor), powerOf2);
+    // Base size (each object or array adds some overhead)
+    size_t baseSize = len;
     
-    return powerOf2;
+    // Add overhead for objects and arrays
+    baseSize += (numObjects * 20); // Approximate overhead per object
+    baseSize += (numArrays * 10);  // Approximate overhead per array
+    
+    // Apply the safety factor
+    size_t estimatedSize = baseSize * safetyFactor;
+    
+    // Ensure a minimum size
+    return max(estimatedSize, (size_t)512);
 }
 
 // Process components JSON with increased memory allocation
@@ -180,6 +194,11 @@ uint8_t countComponentsByType(const String& componentsJson, const char* componen
 }
 
 void initializeModuleInfo() {
+    // Create defaults directory if it doesn't exist
+    if (!LittleFS.exists("/config/defaults")) {
+        LittleFS.mkdir("/config/defaults");
+    }
+    
     // Create default files if they don't exist
     if (!LittleFS.exists("/config/info.json")) {
         USBSerial.println("info.json not found, creating default");
@@ -195,6 +214,9 @@ void initializeModuleInfo() {
             "supportedComponentTypes": ["button", "encoder", "display"]
         })";
         writeJsonFile("/config/info.json", defaultInfo);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/info.json", defaultInfo);
     }
     
     if (!LittleFS.exists("/config/components.json")) {
@@ -210,34 +232,94 @@ void initializeModuleInfo() {
             ]
         })";
         writeJsonFile("/config/components.json", defaultComponents);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/components.json", defaultComponents);
     }
     
-    if (!LittleFS.exists("/config/LEDs.json")) {
-        USBSerial.println("LEDs.json not found, creating default");
-        String defaultLEDs = R"({
-            "leds": {
-                "pin": 7,
-                "brightness": 30,
-                "config": [
-                    {
-                        "id": "led-0",
-                        "stream_address": 0,
-                        "button_id": "button-0",
-                        "color": {"r": 0, "g": 255, "b": 0},
-                        "pressed_color": {"r": 255, "g": 255, "b": 255},
-                        "brightness": 30,
-                        "mode": 0
+    if (!LittleFS.exists("/config/actions.json")) {
+        USBSerial.println("actions.json not found, creating default");
+        String defaultActions = R"({
+            "actions": {
+                "button-0": {
+                    "action": "keyboard",
+                    "options": {
+                        "keyCode": 97
                     }
-                ]
+                }
             }
         })";
-        writeJsonFile("/config/LEDs.json", defaultLEDs);
+        writeJsonFile("/config/actions.json", defaultActions);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/actions.json", defaultActions);
+    }
+    
+    if (!LittleFS.exists("/config/leds.json")) {
+        USBSerial.println("Creating default LED configuration...");
+        String defaultLEDs = createDefaultLEDConfig();
+        writeJsonFile("/config/leds.json", defaultLEDs);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/leds.json", defaultLEDs);
+        
+        USBSerial.println("Default LED configuration created");
+    }
+    
+    if (!LittleFS.exists("/config/reports.json")) {
+        USBSerial.println("reports.json not found, creating default");
+        String defaultReports = R"({
+            "reports": {
+                "keyboard": {
+                    "enabled": true,
+                    "reportId": 1
+                },
+                "consumer": {
+                    "enabled": true,
+                    "reportId": 2
+                },
+                "mouse": {
+                    "enabled": false,
+                    "reportId": 3
+                }
+            }
+        })";
+        writeJsonFile("/config/reports.json", defaultReports);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/reports.json", defaultReports);
+    }
+    
+    // Check if we need to create backup copies of existing configurations
+    if (!LittleFS.exists("/config/defaults/info.json") && LittleFS.exists("/config/info.json")) {
+        String content = FileSystemUtils::readFile("/config/info.json");
+        writeJsonFile("/config/defaults/info.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/components.json") && LittleFS.exists("/config/components.json")) {
+        String content = FileSystemUtils::readFile("/config/components.json");
+        writeJsonFile("/config/defaults/components.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/actions.json") && LittleFS.exists("/config/actions.json")) {
+        String content = FileSystemUtils::readFile("/config/actions.json");
+        writeJsonFile("/config/defaults/actions.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/leds.json") && LittleFS.exists("/config/leds.json")) {
+        String content = FileSystemUtils::readFile("/config/leds.json");
+        writeJsonFile("/config/defaults/leds.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/reports.json") && LittleFS.exists("/config/reports.json")) {
+        String content = FileSystemUtils::readFile("/config/reports.json");
+        writeJsonFile("/config/defaults/reports.json", content);
     }
     
     // Load configuration files
     moduleInfo.infoJson = readJsonFile("/config/info.json");
     moduleInfo.componentsJson = readJsonFile("/config/components.json");
-    moduleInfo.ledsJson = readJsonFile("/config/LEDs.json");
+    moduleInfo.ledsJson = readJsonFile("/config/leds.json");
     
     // Get unique ID from ESP32
     uint64_t chipId = ESP.getEfuseMac();

@@ -673,14 +673,14 @@ void WiFiManager::setupWebServer() {
     });
     
     // Get LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(LittleFS, "/config/LEDs.json", "application/json");
+    _server.on("/api/config/leds", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(LittleFS, "/config/leds.json", "application/json");
     });
     
     // Update LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_POST, 
+    _server.on("/api/config/leds", HTTP_POST, 
         [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing LEDs config update...\"}");
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing leds config update...\"}");
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -723,16 +723,16 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!LittleFS.exists("/config/LEDs.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
+                if (!LittleFS.exists("/config/leds.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Leds config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = LittleFS.open("/config/LEDs.json", "w");
+                File file = LittleFS.open("/config/leds.json", "w");
                 if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open leds config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
@@ -747,7 +747,7 @@ void WiFiManager::setupWebServer() {
                 
                 if (file.print(jsonString) != jsonString.length()) {
                     file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write LEDs config to file\"}");
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write leds config to file\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
@@ -755,7 +755,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = LittleFS.open("/config/LEDs.json", "r");
+                File verifyFile = LittleFS.open("/config/leds.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -780,25 +780,24 @@ void WiFiManager::setupWebServer() {
                 }
 
                 // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LEDs config updated successfully\",\"verified\":true}");
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Leds config updated successfully\",\"verified\":true}");
                 accumulatedData = ""; // Reset for next request
 
                 // Reload the configuration
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-                
                 if (keyHandler) {
                     auto actions = ConfigManager::loadActions("/config/actions.json");
                     keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Key configuration reloaded");
+                    USBSerial.println("Reports configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
 
-    // Add CORS preflight handler for LEDs endpoint
-    _server.on("/api/config/LEDs", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    // Add CORS preflight handler for leds endpoint
+    _server.on("/api/config/leds", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse(200);
         response->addHeader("Access-Control-Allow-Origin", "*");
         response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
@@ -1626,6 +1625,139 @@ void WiFiManager::setupWebServer() {
     // Get macros list
     // ... existing code ...
 
+    // Add after the existing API endpoints but before the macros section
+    
+    // Restore configuration from defaults
+    _server.on("/api/config/restore", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            // Check for config parameter
+            if (!request->hasParam("config")) {
+                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing config parameter\"}");
+                return;
+            }
+            
+            String configName = request->getParam("config")->value();
+            USBSerial.printf("Restoring %s configuration from defaults\n", configName.c_str());
+            
+            // Validate config name
+            String validConfigs[] = {"info", "components", "leds", "actions", "reports", "display"};
+            bool isValidConfig = false;
+            
+            for (const String& validConfig : validConfigs) {
+                if (configName == validConfig) {
+                    isValidConfig = true;
+                    break;
+                }
+            }
+            
+            if (!isValidConfig) {
+                request->send(400, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Invalid config name. Valid options: info, components, leds, actions, reports, display\"}");
+                return;
+            }
+            
+            // Check if default file exists
+            String defaultFilePath = "/config/defaults/" + configName + ".json";
+            String configFilePath = "/config/" + configName + ".json";
+            
+            if (!LittleFS.exists(defaultFilePath)) {
+                request->send(404, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Default configuration not found\"}");
+                return;
+            }
+            
+            // Read default file
+            File srcFile = LittleFS.open(defaultFilePath, "r");
+            if (!srcFile) {
+                request->send(500, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Failed to open default configuration file\"}");
+                return;
+            }
+            
+            // Create destination file
+            File destFile = LittleFS.open(configFilePath, "w");
+            if (!destFile) {
+                srcFile.close();
+                request->send(500, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Failed to open configuration file for writing\"}");
+                return;
+            }
+            
+            // Copy file contents
+            uint8_t buffer[512];
+            size_t bytesRead;
+            
+            while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+                destFile.write(buffer, bytesRead);
+            }
+            
+            srcFile.close();
+            destFile.close();
+            
+            // Reload configuration if needed
+            if (configName == "leds") {
+                // Reload LED configuration
+                initializeLED();
+                USBSerial.println("LED configuration restored and reloaded");
+            } else if (configName == "actions") {
+                // Reload key configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Actions configuration restored and reloaded");
+                }
+            }
+            
+            // Return success response
+            request->send(200, "application/json", 
+                "{\"status\":\"success\",\"message\":\"Configuration restored successfully\"}");
+        }
+    );
+    
+    // Add CORS preflight handler for restore endpoint
+    _server.on("/api/config/restore", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Reset LEDs to default configuration
+    _server.on("/api/led/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+        USBSerial.println("Resetting LED configuration to default");
+        
+        // Check if default config exists
+        if (LittleFS.exists("/config/defaults/leds.json")) {
+            File srcFile = LittleFS.open("/config/defaults/leds.json", "r");
+            File destFile = LittleFS.open("/config/leds.json", "w");
+            
+            if (srcFile && destFile) {
+                // Copy file contents
+                uint8_t buffer[512];
+                size_t bytesRead;
+                
+                while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+                    destFile.write(buffer, bytesRead);
+                }
+                
+                srcFile.close();
+                destFile.close();
+                
+                // Reload LED configuration
+                initializeLED();
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LED configuration reset successfully\"}");
+                return;
+            } else {
+                if (srcFile) srcFile.close();
+                if (destFile) destFile.close();
+            }
+        }
+        
+        request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to reset LED configuration\"}");
+    });
+    
     // Start server
     _server.begin();
     
@@ -1977,21 +2109,21 @@ void WiFiManager::resetToDefaults() {
     
     // Reset other configs as needed
     // e.g., copy default configs to active configs
-    if (LittleFS.exists("/defaults/LEDs.json")) {
-        File srcFile = LittleFS.open("/defaults/LEDs.json", "r");
-        File destFile = LittleFS.open("/config/LEDs.json", "w");
+    if (LittleFS.exists("/config/defaults/leds.json")) {
+        File srcFile = LittleFS.open("/config/defaults/leds.json", "r");
+        File destFile = LittleFS.open("/config/leds.json", "w");
         
         if (srcFile && destFile) {
+            size_t fileSize = srcFile.size();
             uint8_t buffer[512];
-            size_t bytesRead;
             
-            while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+            while (srcFile.available()) {
+                size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
                 destFile.write(buffer, bytesRead);
             }
             
             srcFile.close();
             destFile.close();
-            USBSerial.println("LED configuration reset to defaults");
         }
     }
     

@@ -55,7 +55,7 @@ The web interface allows you to:
 
 The firmware uses JSON configuration files stored in the ESP32's SPIFFS file system:
 
-- `/config/LEDs.json` - LED configuration
+- `/config/leds.json` - LED configuration
 - `/config/keys.json` - Key mapping configuration
 - `/config/wifi.json` - WiFi settings
 
