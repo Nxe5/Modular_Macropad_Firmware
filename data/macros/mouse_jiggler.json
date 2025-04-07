@@ -1,0 +1,23 @@
+{
+  "id": "mouse_jiggler",
+  "name": "Mouse Jiggler",
+  "description": "Jiggles your mouse around town",
+  "commands": [
+    {
+      "type": "type_text",
+      "text": "Hello, World!"
+    },
+    {
+      "type": "delay",
+      "ms": 500
+    },
+    {
+      "type": "key_press",
+      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "type_text",
+      "text": "Typed with macros!"
+    }
+  ]
+} 

@@ -1,0 +1,27 @@
+{
+  "id": "open_iterm_spotlight",
+  "name": "Open iTerm via Spotlight",
+  "description": "Opens Spotlight and launches iTerm",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]  
+    },
+    {
+      "type": "delay",
+      "ms": 300  
+    },
+    {
+      "type": "type_text",
+      "text": "iterm"
+    },
+    {
+      "type": "delay",
+      "ms": 200  
+    },
+    {
+      "type": "key_press",
+      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]  
+    }
+  ]
+}
