@@ -941,11 +941,25 @@ void loop() {
         runDiagnostics();
     }
 
-    // Minimal loop - print a heartbeat every 5 seconds
+    // Minimal loop - print a heartbeat every 10 seconds
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 10000) {
         lastPrint = millis();
         USBSerial.println("Heartbeat...");
+        
+        // Enable this section if you need diagnostic information
+        /*
+        // Available variables for display
+        USBSerial.println("\n=== AVAILABLE VARIABLES FOR DISPLAY ====");
+        USBSerial.printf("current_mode: %s\n", currentMode.name.c_str());
+        USBSerial.printf("wifi_status: %s\n", WiFiManager::isConnected() ? "Connected" : "Disconnected");
+        USBSerial.printf("ip_address: %s\n", WiFiManager::getLocalIP().toString().c_str());
+        USBSerial.printf("layer: %s\n", keyHandler ? keyHandler->getCurrentLayer().c_str() : "default");
+        USBSerial.printf("macro_status: %s\n", (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready");
+        USBSerial.printf("SSID: %s\n", WiFiManager::getSSID().c_str());
+        USBSerial.printf("Is AP Mode: %s\n", WiFiManager::isAPMode() ? "Yes" : "No");
+        USBSerial.println("========================================\n");
+        */
         
         // // Optionally print diagnostics every 8 seconds
         // if (keyHandler) {

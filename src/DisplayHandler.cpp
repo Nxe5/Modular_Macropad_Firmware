@@ -124,18 +124,19 @@ void updateDisplay() {
     }
     lastDisplayUpdate = currentTime;
     
-    // Debug output for all available variables
+    // Variables for display are available but won't be logged every time
+    // Only uncomment for debugging if needed
+    /*
     USBSerial.println("\n=== AVAILABLE VARIABLES FOR DISPLAY ====");
     USBSerial.printf("current_mode: %s\n", currentMode.name.c_str());
     USBSerial.printf("wifi_status: %s\n", WiFiManager::isConnected() ? "Connected" : "Disconnected");
     USBSerial.printf("ip_address: %s\n", WiFiManager::getLocalIP().toString().c_str());
     USBSerial.printf("layer: %s\n", keyHandler ? keyHandler->getCurrentLayer().c_str() : "default");
     USBSerial.printf("macro_status: %s\n", (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready");
-    
-    // Additional WiFi information
     USBSerial.printf("SSID: %s\n", WiFiManager::getSSID().c_str());
     USBSerial.printf("Is AP Mode: %s\n", WiFiManager::isAPMode() ? "Yes" : "No");
     USBSerial.println("========================================\n");
+    */
     
     // Check if we need to clear a temporary message
     if (temporaryMessageActive) {
@@ -158,59 +159,49 @@ void updateDisplay() {
         return;
     }
     
-    USBSerial.println("Updating display - clearing screen");
-    
-    // Clear the screen for redraw
+    // Clear the screen for redraw without logging it every time
     display->fillScreen(ST77XX_BLACK);
     
     // Draw all elements from current mode
-    USBSerial.printf("Drawing %d elements from current mode\n", currentMode.elements.size());
+    // USBSerial.printf("Drawing %d elements from current mode\n", currentMode.elements.size());
     
     if (currentMode.elements.empty()) {
         USBSerial.println("WARNING: No elements to draw!");
     }
     
     for (const auto& element : currentMode.elements) {
-        USBSerial.printf("Drawing element type %d at position %d,%d with color %d\n", 
-                       element.type, element.x, element.y, element.color);
+        // Removed repetitive element drawing logs
         switch (element.type) {
             case ELEMENT_TEXT: {
                 String processedText = element.text;
-                USBSerial.printf("Processing text: %s\n", element.text.c_str());
+                // USBSerial.printf("Processing text: %s\n", element.text.c_str());
                 
-                // Check for and replace variables with detailed debug output
+                // Check for and replace variables without logging each replacement
                 if (element.text.indexOf("{current_mode}") >= 0) {
-                    USBSerial.printf("Replacing {current_mode} with: %s\n", currentMode.name.c_str());
                     processedText.replace("{current_mode}", currentMode.name);
                 }
                 
                 if (element.text.indexOf("{wifi_status}") >= 0) {
                     String wifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
-                    USBSerial.printf("Replacing {wifi_status} with: %s\n", wifiStatus.c_str());
                     processedText.replace("{wifi_status}", wifiStatus);
                 }
                 
                 if (element.text.indexOf("{ip_address}") >= 0) {
                     String ipAddress = WiFiManager::getLocalIP().toString();
-                    USBSerial.printf("Replacing {ip_address} with: %s\n", ipAddress.c_str());
                     processedText.replace("{ip_address}", ipAddress);
                 }
                 
                 if (element.text.indexOf("{layer}") >= 0) {
                     String layer = keyHandler ? keyHandler->getCurrentLayer() : "default";
-                    USBSerial.printf("Replacing {layer} with: %s\n", layer.c_str());
                     processedText.replace("{layer}", layer);
                 }
                 
                 if (element.text.indexOf("{macro_status}") >= 0) {
                     String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
-                    USBSerial.printf("Replacing {macro_status} with: %s\n", macroStatus.c_str());
                     processedText.replace("{macro_status}", macroStatus);
                 }
                 
-                USBSerial.printf("After processing: %s\n", processedText.c_str());
-                USBSerial.printf("Drawing at x: %d, y: %d, color: %d, size: %d\n", 
-                               element.x, element.y, element.color, element.size);
+                // Removed "After processing" log
                 
                 display->setTextSize(element.size);
                 display->setTextColor(element.color);
