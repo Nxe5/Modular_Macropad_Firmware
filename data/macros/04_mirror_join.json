@@ -1,0 +1,75 @@
+{
+  "id": "04_mirror_join",
+  "name": "Mirror Join",
+  "description": "Sets up mirror modifier and joins geometry",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "m"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "x"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "j"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 

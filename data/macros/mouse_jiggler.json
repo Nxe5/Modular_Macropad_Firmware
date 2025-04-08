@@ -1,23 +1,50 @@
 {
   "id": "mouse_jiggler",
   "name": "Mouse Jiggler",
-  "description": "Jiggles your mouse around town",
+  "description": "Moves the mouse in a small pattern to prevent screen timeout",
   "commands": [
     {
-      "type": "type_text",
-      "text": "Hello, World!"
+      "type": "repeat_start",
+      "count": 0
+    },
+    {
+      "type": "mouse_move",
+      "x": 1,
+      "y": 0
     },
     {
       "type": "delay",
-      "ms": 500
+      "milliseconds": 500
     },
     {
-      "type": "key_press",
-      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      "type": "mouse_move",
+      "x": 0,
+      "y": 1
     },
     {
-      "type": "type_text",
-      "text": "Typed with macros!"
+      "type": "delay",
+      "milliseconds": 500
+    },
+    {
+      "type": "mouse_move",
+      "x": -1,
+      "y": 0
+    },
+    {
+      "type": "delay",
+      "milliseconds": 500
+    },
+    {
+      "type": "mouse_move",
+      "x": 0,
+      "y": -1
+    },
+    {
+      "type": "delay",
+      "milliseconds": 500
+    },
+    {
+      "type": "repeat_end"
     }
   ]
 } 

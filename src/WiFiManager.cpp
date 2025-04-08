@@ -1,4 +1,5 @@
 #include "WiFiManager.h"
+#include "JsonConverters.h"  // Include our custom JSON converters
 #include "ConfigManager.h"
 #include "KeyHandler.h"
 #include "HIDHandler.h"
@@ -940,7 +941,7 @@ void WiFiManager::setupWebServer() {
     
     // Get macros list
     _server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(4096);
+        DynamicJsonDocument doc(32768);  // Increased from 4096 to 32768 (32KB)
         JsonArray macroArray = doc.createNestedArray("macros");
         
         if (macroHandler) {
@@ -953,7 +954,7 @@ void WiFiManager::setupWebServer() {
                     macroObj["id"] = macro.id;
                     macroObj["name"] = macro.name;
                     macroObj["description"] = macro.description;
-                    // Don't include commands for the listing
+                    macroObj["commands"] = macro.commands;
                 }
             }
         }

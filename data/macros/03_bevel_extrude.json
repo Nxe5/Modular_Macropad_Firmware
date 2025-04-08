@@ -1,0 +1,59 @@
+{
+  "id": "03_bevel_extrude",
+  "name": "Bevel Extrude",
+  "description": "Creates a beveled extrusion with optimal settings",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "e"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "b"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "0.1"
+    }
+  ]
+} 

@@ -1,0 +1,27 @@
+{
+  "id": "02_edge_loop_select",
+  "name": "Edge Loop Select",
+  "description": "Selects edge loops for quick modeling operations",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "mouse_click",
+      "button": "left"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 
