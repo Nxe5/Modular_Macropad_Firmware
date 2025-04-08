@@ -1,7 +1,7 @@
 {
   "id": "05_keyframe_all",
   "name": "Keyframe All Properties",
-  "description": "Creates keyframes for all animated properties",
+  "description": "Quickly creates keyframes for all animated properties of selected objects. This macro is a time-saver for animators, automatically setting keyframes for position, rotation, scale, and other animated properties. Essential for character animation, mechanical animations, or any complex motion where multiple properties need to be keyframed simultaneously. Helps maintain consistent animation timing and reduces the chance of missing important keyframes.",
   "commands": [
     {
       "type": "key_press",

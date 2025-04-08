@@ -595,8 +595,7 @@ void createWorkingActionsFile() {
     "active": true,
     "layer-config": {
       "button-1": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        "type": "cycle-layer"
       },
       "button-2": {
         "type": "hid",
@@ -611,6 +610,28 @@ void createWorkingActionsFile() {
         "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
       }
     }
+  },
+  "layers": {
+    "Nxe5-actions-layer": {
+      "active": true,
+      "layer-config": {
+        "button-1": {
+          "type": "cycle-layer"
+        },
+        "button-2": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x1B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-3": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x12", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-4": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x18", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        }
+      }
+    }
   }
 })";
 
@@ -621,42 +642,10 @@ void createWorkingActionsFile() {
     bool success = FileSystemUtils::writeFile("/data/config/actions.json", workingActions);
     
     if (success) {
-        USBSerial.println("Working actions file created successfully at /data/config/actions.json!");
-        
-        // Verify the file was written correctly
-        File file = LittleFS.open("/data/config/actions.json", "r");
-        if (file) {
-            size_t size = file.size();
-            USBSerial.printf("Verified file exists with size: %d bytes\n", size);
-            
-            if (size > 0) {
-                String content = file.readString();
-                if (content == workingActions) {
-                    USBSerial.println("File content matches exactly what we wrote");
-                } else {
-                    USBSerial.println("WARNING: File content does not match what we wrote!");
-                }
-            }
-            file.close();
-        } else {
-            USBSerial.println("WARNING: Could not open file for verification!");
-        }
-        
+        USBSerial.println("Created working actions.json file");
     } else {
-        USBSerial.println("Failed to create working actions file!");
+        USBSerial.println("Failed to create working actions.json file");
     }
-    
-    // Remove the old file in /config if it exists
-    if (FileSystemUtils::fileExists("/config/actions.json")) {
-        if (LittleFS.remove("/config/actions.json")) {
-            USBSerial.println("Removed old file at /config/actions.json");
-        } else {
-            USBSerial.println("Failed to remove old file at /config/actions.json");
-        }
-    }
-    
-    USBSerial.println("You may need to restart the device for changes to take effect");
-    USBSerial.println("==== DONE ====\n");
 }
 
 // Helper function for detailed filesystem diagnostics

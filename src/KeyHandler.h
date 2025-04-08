@@ -17,11 +17,12 @@
 
 // Action types for key events
 enum ActionType {
-    ACTION_NONE,
-    ACTION_HID,
-    ACTION_MULTIMEDIA,
-    ACTION_MACRO,
-    ACTION_LAYER
+    ACTION_NONE = 0,
+    ACTION_HID = 1,
+    ACTION_MULTIMEDIA = 2,
+    ACTION_MACRO = 3,
+    ACTION_LAYER = 4,
+    ACTION_CYCLE_LAYER = 5
 };
 
 enum KeyAction {
@@ -78,6 +79,9 @@ public:
     
     // Add the displayKeyConfig method declaration
     void displayKeyConfig(const KeyConfig& config);
+
+    // Add method to cycle to next layer
+    bool cycleToNextLayer();
     
 private:
     void cleanup();
@@ -95,6 +99,9 @@ private:
     std::map<String, std::map<String, KeyConfig>> layerConfigs; // Layer -> ComponentID -> Config
     bool saveCurrentLayer();
     bool loadCurrentLayer();
+    
+    // Add helper method to get next layer name
+    String getNextLayerName() const;
     
     // Direct position mapping
     struct ComponentPosition {

@@ -4,8 +4,7 @@
     "active": true,
     "layer-config": {
       "button-1": {
-        "type": "macro",
-        "macroId": "text_hello"
+        "type": "cycle-layer"
       },
       "button-2": {
         "type": "hid",
@@ -80,6 +79,64 @@
         "clockwise": ["0x00", "0x00", "0xE9", "0x00"],
         "counterclockwise": ["0x00", "0x00", "0xEA", "0x00"],
         "buttonPress": ["0x00", "0x00", "0xEA", "0x00"]
+      }
+    }
+  },
+  "layers": {
+    "Nxe5-actions-layer": {
+      "active": true,
+      "layer-config": {
+        "button-1": {
+          "type": "cycle-layer"
+        },
+        "button-2": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x1B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-3": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x12", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-4": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x18", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-5": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-6": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x1A", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-7": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x16", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-8": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-9": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x1D", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-10": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x14", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-11": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-12": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        },
+        "button-13": {
+          "type": "hid",
+          "buttonPress": ["0x00", "0x00", "0x1E", "0x00", "0x00", "0x00", "0x00", "0x00"]
+        }
       }
     }
   }

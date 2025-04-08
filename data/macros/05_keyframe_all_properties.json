@@ -1,7 +1,7 @@
 {
-  "id": "open_iterm_spotlight",
-  "name": "Open iTerm Spotlight",
-  "description": "Quickly opens iTerm using Spotlight Search. This macro automates the process of opening the terminal, saving time for developers and power users who frequently need terminal access. Uses Command + Space to open Spotlight and types 'iterm' to launch iTerm2.",
+  "id": "05_keyframe_all_properties",
+  "name": "Keyframe All Properties",
+  "description": "Creates keyframes for all animated properties",
   "commands": [
     {
       "type": "key_press",
@@ -13,7 +13,7 @@
     },
     {
       "type": "type_text",
-      "text": "iterm"
+      "text": "a"
     },
     {
       "type": "delay",
@@ -29,7 +29,15 @@
     },
     {
       "type": "key_press",
-      "report": ["0x00", "0x00", "0x28", "0x00", "0x00", "0x00", "0x00", "0x00"]
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "i"
     },
     {
       "type": "delay",
@@ -40,4 +48,4 @@
       "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
     }
   ]
-}
+} 

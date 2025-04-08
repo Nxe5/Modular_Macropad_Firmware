@@ -22,7 +22,7 @@ struct Component {
 
 struct ActionConfig {
   String id;
-  String type;
+  String type;  // "hid", "multimedia", "macro", "layer", "cycle-layer"
   // For HID reports, consumer reports, macro info, etc.
   std::vector<String> hidReport; // Can store as hex strings for conversion later
   std::vector<String> consumerReport;
