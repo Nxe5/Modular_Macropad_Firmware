@@ -1,21 +1,31 @@
+// DisplayHandler.cpp
 #include "DisplayHandler.h"
-#include <USBCDC.h>
 #include "WiFiManager.h"
-#include <WiFi.h>
 #include "KeyHandler.h"
 #include "MacroHandler.h"
+#include "HIDHandler.h"
+#include <LittleFS.h>
+#include <Arduino.h>
 
+// External declaration for USBSerial
 extern USBCDC USBSerial;
+
+// External references
 extern KeyHandler* keyHandler;
 extern MacroHandler* macroHandler;
 
-static Adafruit_ST7789* display = nullptr;
-static uint32_t temporaryMessageTimeout = 0;
-static bool temporaryMessageActive = false;
-static String lastNormalContent = "";
-static unsigned long lastDisplayUpdate = 0;
-static const unsigned long DISPLAY_UPDATE_INTERVAL = 250; // Rate limit to 4 updates per second
-static bool screenInitialized = false; // Track if the base screen has been initialized
+// Global variables
+Adafruit_ST7789* display = nullptr;
+bool temporaryMessageActive = false;
+uint32_t temporaryMessageTimeout = 0;
+static uint32_t lastDisplayUpdate = 0;
+
+// Display configuration
+String activeMode = "config";
+DisplayMode currentMode;
+std::map<String, DisplayMode> displayModes;
+String lastNormalContent = "";
+static bool screenInitialized = false;
 
 void initializeDisplay() {
     USBSerial.println("Starting display initialization...");
@@ -31,32 +41,35 @@ void initializeDisplay() {
     
     // Set SPI speed and initialize
     display->setSPISpeed(80000000);
-    display->init(240, 280, SPI_MODE0); // Use 280 height as in working example
+    display->init(240, 280, SPI_MODE0);
     
     USBSerial.println("Display initialized");
     
-    // Set rotation and clear screen
-    display->setRotation(1); // Use rotation 1 as in working example
+    // Set rotation to landscape mode (1 = 90 degrees, 3 = 270 degrees)
+    display->setRotation(1);
     display->fillScreen(ST77XX_BLACK);
     
-    USBSerial.println("Screen cleared");
-    
-    // Draw a test pattern to verify display is working
-    display->fillRect(0, 0, 240, 40, ST77XX_RED);
-    display->fillRect(0, 40, 240, 40, ST77XX_GREEN);
-    display->fillRect(0, 80, 240, 40, ST77XX_BLUE);
+    // Draw initial test pattern for landscape orientation
+    display->fillRect(0, 0, 93, 240, ST77XX_RED);
+    display->fillRect(93, 0, 93, 240, ST77XX_GREEN);
+    display->fillRect(186, 0, 94, 240, ST77XX_BLUE);
     
     display->setTextColor(ST77XX_WHITE);
     display->setTextSize(3);
-    display->setCursor(40, 140);
+    display->setCursor(100, 100);
     display->println("Hello");
-    display->setCursor(40, 180);
+    display->setCursor(100, 140);
     display->println("Andrew!");
     
     USBSerial.println("Test pattern drawn - display ready");
     
-    // Skip temporary message for now
-    // showTemporaryMessage("MacroPad Starting...", 2000);
+    // Load display configuration
+    loadDisplayConfig();
+    
+    // Set initial delay before switching to active mode
+    temporaryMessageTimeout = millis() + 3000;
+    temporaryMessageActive = true;
+    screenInitialized = true;
 }
 
 Adafruit_ST7789* getDisplay() {
@@ -71,177 +84,400 @@ void printText(const char* text, int x, int y, uint16_t color, uint8_t size) {
     display->print(text);
 }
 
+void drawTestPattern() {
+    if (!display || !screenInitialized) {
+        USBSerial.println("Cannot draw test pattern - display not initialized");
+        return;
+    }
+    
+    USBSerial.println("Drawing manual test pattern");
+    
+    // Clear the screen
+    display->fillScreen(ST77XX_BLACK);
+    
+    // Draw some basic shapes
+    display->fillRect(10, 10, 50, 50, ST77XX_RED);
+    display->fillRect(70, 10, 50, 50, ST77XX_GREEN);
+    display->fillRect(130, 10, 50, 50, ST77XX_BLUE);
+    
+    // Draw some text
+    display->setTextColor(ST77XX_WHITE);
+    display->setTextSize(2);
+    display->setCursor(60, 80);
+    display->println("TEST PATTERN");
+    
+    display->setTextSize(1);
+    display->setCursor(20, 120);
+    display->println("If you can see this, display works!");
+    
+    // Draw a line
+    display->drawLine(10, 150, 200, 150, ST77XX_YELLOW);
+    
+    USBSerial.println("Test pattern drawn");
+}
+
 void updateDisplay() {
     // Rate limit display updates to prevent flickering
-    unsigned long currentTime = millis();
-    if (currentTime - lastDisplayUpdate < DISPLAY_UPDATE_INTERVAL) {
+    uint32_t currentTime = millis();
+    if (currentTime - lastDisplayUpdate < currentMode.refresh_rate) {
         return;
     }
     lastDisplayUpdate = currentTime;
     
+    // Debug output for all available variables
+    USBSerial.println("\n=== AVAILABLE VARIABLES FOR DISPLAY ====");
+    USBSerial.printf("current_mode: %s\n", currentMode.name.c_str());
+    USBSerial.printf("wifi_status: %s\n", WiFiManager::isConnected() ? "Connected" : "Disconnected");
+    USBSerial.printf("ip_address: %s\n", WiFiManager::getLocalIP().toString().c_str());
+    USBSerial.printf("layer: %s\n", keyHandler ? keyHandler->getCurrentLayer().c_str() : "default");
+    USBSerial.printf("macro_status: %s\n", (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready");
+    
+    // Additional WiFi information
+    USBSerial.printf("SSID: %s\n", WiFiManager::getSSID().c_str());
+    USBSerial.printf("Is AP Mode: %s\n", WiFiManager::isAPMode() ? "Yes" : "No");
+    USBSerial.println("========================================\n");
+    
     // Check if we need to clear a temporary message
     if (temporaryMessageActive) {
         checkTemporaryMessage();
-        return; // Don't update display when showing temporary message
+        if (!temporaryMessageActive && activeMode != "") {
+            // Switch to active mode after temporary message
+            activateDisplayMode(activeMode);
+        }
+        return;
     }
     
-    // Only initialize the screen once at startup or after temp message
-    if (!display) return;
+    // Only update if display is initialized
+    if (!display) {
+        USBSerial.println("ERROR: Display object is NULL");
+        return;
+    }
     
-    // Only draw background and static elements when needed
     if (!screenInitialized) {
-        display->fillScreen(ST77XX_BLACK);
-        
-        // Draw title - static
-        display->setCursor(10, 10);
-        display->setTextSize(2);
-        display->setTextColor(ST77XX_WHITE);
-        display->println("MacroPad");
-        
-        display->drawLine(10, 35, 230, 35, ST77XX_BLUE);
-        display->drawLine(10, 95, 230, 95, ST77XX_BLUE);
-        
-        screenInitialized = true;
+        USBSerial.println("ERROR: Screen not initialized");
+        return;
     }
     
-    // Update dynamic content by clearing and redrawing just those sections
+    USBSerial.println("Updating display - clearing screen");
     
-    // Clear and update layer info
-    display->fillRect(10, 45, 220, 15, ST77XX_BLACK);
-    display->setCursor(10, 45);
-    display->setTextSize(1);
-    display->setTextColor(ST77XX_CYAN);
-    String activeLayer = "Default";
-    if (keyHandler) {
-        activeLayer = keyHandler->getCurrentLayer();
-    }
-    display->print("Active Layer: " + activeLayer);
+    // Clear the screen for redraw
+    display->fillScreen(ST77XX_BLACK);
     
-    // Clear and update macro status
-    display->fillRect(10, 60, 220, 15, ST77XX_BLACK);
-    display->setCursor(10, 60);
-    display->setTextColor(ST77XX_GREEN);
-    if (macroHandler && macroHandler->isExecuting()) {
-        display->print("Macro: Running");
-    } else {
-        display->print("Macro: Ready");
+    // Draw all elements from current mode
+    USBSerial.printf("Drawing %d elements from current mode\n", currentMode.elements.size());
+    
+    if (currentMode.elements.empty()) {
+        USBSerial.println("WARNING: No elements to draw!");
     }
     
-    // Clear and update mode
-    display->fillRect(10, 75, 220, 15, ST77XX_BLACK);
-    display->setCursor(10, 75);
-    display->setTextColor(ST77XX_YELLOW);
-    display->println("Mode: Normal");
-    
-    // Show WiFi information only when changed
-    static uint32_t lastWifiUpdate = 0;
-    if (currentTime - lastWifiUpdate > 60000) { // Update WiFi info at most once per minute
-        bool isAPMode = WiFiManager::isAPMode();
-        String ipAddress = isAPMode ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
-        String ssid = WiFiManager::getSSID();
-        
-        // Display the WiFi info
-        displayWiFiInfo(isAPMode, ipAddress, ssid);
-        lastWifiUpdate = currentTime;
+    for (const auto& element : currentMode.elements) {
+        USBSerial.printf("Drawing element type %d at position %d,%d with color %d\n", 
+                       element.type, element.x, element.y, element.color);
+        switch (element.type) {
+            case ELEMENT_TEXT: {
+                String processedText = element.text;
+                USBSerial.printf("Processing text: %s\n", element.text.c_str());
+                
+                // Check for and replace variables with detailed debug output
+                if (element.text.indexOf("{current_mode}") >= 0) {
+                    USBSerial.printf("Replacing {current_mode} with: %s\n", currentMode.name.c_str());
+                    processedText.replace("{current_mode}", currentMode.name);
+                }
+                
+                if (element.text.indexOf("{wifi_status}") >= 0) {
+                    String wifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
+                    USBSerial.printf("Replacing {wifi_status} with: %s\n", wifiStatus.c_str());
+                    processedText.replace("{wifi_status}", wifiStatus);
+                }
+                
+                if (element.text.indexOf("{ip_address}") >= 0) {
+                    String ipAddress = WiFiManager::getLocalIP().toString();
+                    USBSerial.printf("Replacing {ip_address} with: %s\n", ipAddress.c_str());
+                    processedText.replace("{ip_address}", ipAddress);
+                }
+                
+                if (element.text.indexOf("{layer}") >= 0) {
+                    String layer = keyHandler ? keyHandler->getCurrentLayer() : "default";
+                    USBSerial.printf("Replacing {layer} with: %s\n", layer.c_str());
+                    processedText.replace("{layer}", layer);
+                }
+                
+                if (element.text.indexOf("{macro_status}") >= 0) {
+                    String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
+                    USBSerial.printf("Replacing {macro_status} with: %s\n", macroStatus.c_str());
+                    processedText.replace("{macro_status}", macroStatus);
+                }
+                
+                USBSerial.printf("After processing: %s\n", processedText.c_str());
+                USBSerial.printf("Drawing at x: %d, y: %d, color: %d, size: %d\n", 
+                               element.x, element.y, element.color, element.size);
+                
+                display->setTextSize(element.size);
+                display->setTextColor(element.color);
+                display->setCursor(element.x, element.y);
+                display->println(processedText);
+                break;
+            }
+            case ELEMENT_LINE:
+                display->drawLine(element.x, element.y, element.end_x, element.end_y, element.color);
+                break;
+            case ELEMENT_RECT:
+                if (element.filled) {
+                    display->fillRect(element.x, element.y, element.width, element.height, element.color);
+                } else {
+                    display->drawRect(element.x, element.y, element.width, element.height, element.color);
+                }
+                break;
+            case ELEMENT_CIRCLE:
+                if (element.filled) {
+                    display->fillCircle(element.x, element.y, element.width/2, element.color);
+                } else {
+                    display->drawCircle(element.x, element.y, element.width/2, element.color);
+                }
+                break;
+        }
     }
 }
 
-void toggleMode() {
-    // Add mode toggling logic
+void loadDisplayConfig() {
+    if (!LittleFS.exists(DISPLAY_CONFIG_PATH)) {
+        USBSerial.println("Display config not found, using defaults");
+        return;
+    }
+    
+    File file = LittleFS.open(DISPLAY_CONFIG_PATH, "r");
+    if (!file) {
+        USBSerial.println("Failed to open display config");
+        return;
+    }
+    
+    // Parse JSON configuration
+    DynamicJsonDocument doc(4096);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    
+    if (error) {
+        USBSerial.print("Failed to parse display config: ");
+        USBSerial.println(error.c_str());
+        return;
+    }
+    
+    // Clear existing modes
+    displayModes.clear();
+    
+    // Load active mode
+    activeMode = doc["active_mode"].as<String>();
+    
+    // Load all display modes
+    JsonObject modes = doc["modes"];
+    for (JsonPair mode : modes) {
+        DisplayMode displayMode;
+        displayMode.name = mode.value()["name"].as<String>();
+        displayMode.description = mode.value()["description"].as<String>();
+        displayMode.refresh_rate = mode.value()["refresh_rate"] | DISPLAY_UPDATE_INTERVAL;
+        
+        USBSerial.printf("Loading mode: %s with refresh rate: %d\n", 
+                        displayMode.name.c_str(), displayMode.refresh_rate);
+        
+        // Load elements
+        JsonArray elements = mode.value()["elements"].as<JsonArray>();
+        USBSerial.printf("Found %d elements in JSON array\n", elements.size());
+        
+        for (JsonVariant element : elements) {
+            DisplayElement displayElement;
+            JsonObject elementObj = element.as<JsonObject>();
+            USBSerial.printf("Loading element of type: %s\n", elementObj["type"].as<String>().c_str());
+            
+            // Common properties
+            displayElement.x = elementObj["x"] | 0;
+            displayElement.y = elementObj["y"] | 0;
+            
+            // Parse color (default to white)
+            String colorStr = elementObj["color"] | "white";
+            USBSerial.printf("Color string: %s\n", colorStr.c_str());
+            
+            // Check if it's a hex value (starts with 0x)
+            if (colorStr.startsWith("0x")) {
+                // Convert hex string to integer
+                char* endPtr;
+                uint32_t colorValue = strtol(colorStr.c_str(), &endPtr, 16);
+                displayElement.color = colorValue;
+                USBSerial.printf("Using hex color: 0x%X\n", displayElement.color);
+            }
+            else if (colorStr == "white") {
+                displayElement.color = ST77XX_WHITE;
+                USBSerial.println("Using WHITE color");
+            }
+            else if (colorStr == "red") {
+                displayElement.color = ST77XX_RED;
+                USBSerial.println("Using RED color");
+            }
+            else if (colorStr == "green") {
+                displayElement.color = ST77XX_GREEN;
+                USBSerial.println("Using GREEN color");
+            }
+            else if (colorStr == "blue") {
+                displayElement.color = ST77XX_BLUE;
+                USBSerial.println("Using BLUE color");
+            }
+            else if (colorStr == "yellow") {
+                displayElement.color = ST77XX_YELLOW;
+                USBSerial.println("Using YELLOW color");
+            }
+            else if (colorStr == "cyan") {
+                displayElement.color = ST77XX_CYAN;
+                USBSerial.println("Using CYAN color");
+            }
+            else {
+                displayElement.color = ST77XX_WHITE;
+                USBSerial.println("Using default WHITE color");
+            }
+            
+            // Type specific properties
+            String type = elementObj["type"].as<String>();
+            if (type == "text") {
+                displayElement.type = ELEMENT_TEXT;
+                displayElement.text = elementObj["text"].as<String>();
+                displayElement.size = elementObj["size"] | 1;
+            } else if (type == "line") {
+                displayElement.type = ELEMENT_LINE;
+                displayElement.end_x = elementObj["end_x"] | displayElement.x;
+                displayElement.end_y = elementObj["end_y"] | displayElement.y;
+            } else if (type == "rect") {
+                displayElement.type = ELEMENT_RECT;
+                displayElement.width = elementObj["width"] | 10;
+                displayElement.height = elementObj["height"] | 10;
+                displayElement.filled = elementObj["filled"] | false;
+            } else if (type == "circle") {
+                displayElement.type = ELEMENT_CIRCLE;
+                displayElement.width = elementObj["diameter"] | 10;
+                displayElement.filled = elementObj["filled"] | false;
+            }
+            
+            USBSerial.printf("Adding element type %d at position %d,%d with color %d\n", 
+                           displayElement.type, displayElement.x, displayElement.y, displayElement.color);
+            
+            // Add element to mode
+            displayMode.elements.push_back(displayElement);
+            USBSerial.printf("Mode now has %d elements\n", displayMode.elements.size());
+        }
+        
+        // Add mode to map
+        displayModes[mode.key().c_str()] = displayMode;
+    }
+    
+    // Activate the default mode
+    if (!activeMode.isEmpty() && displayModes.count(activeMode) > 0) {
+        activateDisplayMode(activeMode);
+    }
+}
+
+void activateDisplayMode(const String& modeName) {
+    USBSerial.printf("Activating display mode: %s\n", modeName.c_str());
+    
+    if (displayModes.count(modeName) > 0) {
+        USBSerial.printf("Mode found in displayModes map\n");
+        USBSerial.printf("Original mode has %d elements\n", displayModes[modeName].elements.size());
+        
+        // Make a deep copy of the mode
+        currentMode = displayModes[modeName];
+        activeMode = modeName;
+        
+        USBSerial.printf("Activated display mode: %s\n", modeName.c_str());
+        USBSerial.printf("Mode has %d elements\n", currentMode.elements.size());
+        
+        // Debug the elements
+        for (const auto& element : currentMode.elements) {
+            USBSerial.printf("Element type: %d, x: %d, y: %d\n", element.type, element.x, element.y);
+            if (element.type == ELEMENT_TEXT) {
+                USBSerial.printf("Text content: %s\n", element.text.c_str());
+            }
+        }
+    } else {
+        USBSerial.printf("Display mode not found: %s\n", modeName.c_str());
+    }
+}
+
+String getCurrentMode() {
+    return activeMode;
+}
+
+bool isTemporaryMessageActive() {
+    return temporaryMessageActive;
 }
 
 void handleEncoder(int encoderPosition) {
-    // Update display based on encoder position
+    // TODO: Implement encoder handling for display mode switching
+    // This will be implemented when we add support for multiple display modes
 }
 
-// Function to show a temporary message on the display
 void showTemporaryMessage(const char* message, uint32_t duration) {
     if (!display) return;
     
     USBSerial.printf("Display: %s\n", message);
     
     temporaryMessageActive = true;
+    temporaryMessageTimeout = millis() + duration;
     
     // Clear the display
     display->fillScreen(ST77XX_BLACK);
     
-    // Print the new message
-    display->setCursor(10, 10);
+    // Print the message
     display->setTextSize(2);
     display->setTextColor(ST77XX_WHITE);
+    display->setCursor(10, 10);
     display->println("MacroPad");
     
     display->drawLine(10, 35, 230, 35, ST77XX_BLUE);
     
     // Display multiline message with word wrapping
-    display->setCursor(10, 50);
     display->setTextSize(1);
-    
-    // Simple word wrap for the message
-    String msgStr = message;
-    int lineWidth = 0;
-    int spaceWidth = 6; // Approximate width of space
-    int charWidth = 6;  // Approximate width of characters
-    int lineHeight = 10; // Line height
+    String msg = message;
     int yPos = 50;
     int maxWidth = 220;
+    int charWidth = 6; // Approximate width of each character
+    int spaceWidth = 6;
+    int lineHeight = 15;
     
     String word = "";
-    for (unsigned int i = 0; i < msgStr.length(); i++) {
-        char c = msgStr[i];
-        
+    int lineWidth = 0;
+    
+    display->setCursor(10, yPos);
+    
+    for (int i = 0; i < msg.length(); i++) {
+        char c = msg[i];
         if (c == '\n') {
-            // Direct newline
-            display->print(word);
-            word = "";
-            lineWidth = 0;
+            if (word.length() > 0) {
+                display->print(word);
+                word = "";
+            }
             yPos += lineHeight;
             display->setCursor(10, yPos);
-            continue;
-        }
-        
-        if (c == ' ') {
-            // Check if adding this word would exceed the line width
+            lineWidth = 0;
+        } else if (c == ' ') {
             if (lineWidth + word.length() * charWidth > maxWidth) {
                 yPos += lineHeight;
                 display->setCursor(10, yPos);
                 lineWidth = 0;
             }
-            
-            display->print(word + " ");
-            lineWidth += word.length() * charWidth + spaceWidth;
-            word = "";
+            word += c;
         } else {
             word += c;
         }
     }
-    
-    // Print the last word
-    if (word.length() > 0) {
-        if (lineWidth + word.length() * charWidth > maxWidth) {
-            yPos += lineHeight;
-            display->setCursor(10, yPos);
-        }
-        display->print(word);
-    }
-    
-    // Set the timeout for when to clear this message
-    temporaryMessageTimeout = millis() + duration;
+    display->print(word);
 }
 
-// Check if it's time to clear the temporary message
 void checkTemporaryMessage() {
-    if (temporaryMessageActive && millis() > temporaryMessageTimeout) {
-        // Clear the temporary message flag
+    if (!temporaryMessageActive) return;
+    
+    if (millis() >= temporaryMessageTimeout) {
         temporaryMessageActive = false;
-        
-        // Force a complete redraw on next update
-        screenInitialized = false; // Reset screen initialization flag to force redraw
-        lastDisplayUpdate = 0; // Force next updateDisplay to run
+        display->fillScreen(ST77XX_BLACK);
+        // Don't reset screenInitialized - this was causing the display to stop working
     }
 }
 
-// Add a function to display WiFi information
 void displayWiFiInfo(bool isAPMode, const String& ipAddress, const String& ssid) {
     if (!display) return;
     
@@ -251,60 +487,37 @@ void displayWiFiInfo(bool isAPMode, const String& ipAddress, const String& ssid)
     static bool lastAPMode = false;
     
     // Only update if information has actually changed
-    bool ipChanged = (lastIPAddress != ipAddress);
-    bool ssidChanged = (lastSSID != ssid);
-    bool modeChanged = (lastAPMode != isAPMode);
-    
-    if (!ipChanged && !ssidChanged && !modeChanged) {
-        return; // Nothing changed, don't redraw
+    if (lastIPAddress == ipAddress && lastSSID == ssid && lastAPMode == isAPMode) {
+        return;
     }
     
-    // Update cached values
+    // Update cache
     lastIPAddress = ipAddress;
     lastSSID = ssid;
     lastAPMode = isAPMode;
     
-    // Only clear and redraw the relevant parts that changed
+    // Clear WiFi info area
+    display->fillRect(0, 145, 240, 80, ST77XX_BLACK);
     
-    // Always draw the header (first time or if anything changed)
-    display->fillRect(0, 120, 240, 15, ST77XX_BLACK);
-    display->setCursor(10, 120);
+    // Display connection mode
     display->setTextSize(1);
-    display->setTextColor(ST77XX_YELLOW);
-    display->println("WiFi Status:");
+    display->setCursor(10, 145);
+    display->setTextColor(ST77XX_CYAN);
+    display->println(isAPMode ? "Mode: Access Point" : "Mode: Station");
     
-    // Update mode and SSID if changed
-    if (modeChanged || ssidChanged) {
-        display->fillRect(0, 135, 240, 30, ST77XX_BLACK);
-        display->setCursor(10, 135);
-        display->setTextColor(ST77XX_WHITE);
-        
-        if (isAPMode) {
-            display->println("Mode: Access Point");
-            display->setCursor(10, 150);
-            display->println("SSID: " + ssid);
-        } else {
-            display->println("Mode: Connected to");
-            display->setCursor(10, 150);
-            display->println(ssid);
-        }
-    }
+    // Display SSID
+    display->setCursor(10, 155);
+    display->setTextColor(ST77XX_WHITE);
+    display->println("SSID: " + ssid);
     
-    // Update IP if changed
-    if (ipChanged) {
-        display->fillRect(0, 165, 240, 15, ST77XX_BLACK);
-        display->setCursor(10, 165);
-        display->setTextColor(ST77XX_WHITE);
-        display->println("IP: " + ipAddress);
-    }
+    // Display IP Address
+    display->setCursor(10, 165);
+    display->println("IP: " + ipAddress);
     
-    // These instructions are static, but update if anything else changed
-    if (ipChanged || modeChanged || ssidChanged) {
-        display->fillRect(0, 185, 240, 30, ST77XX_BLACK);
-        display->setCursor(10, 185);
-        display->setTextColor(ST77XX_GREEN);
-        display->println("Visit this IP in a browser");
-        display->setCursor(10, 200);
-        display->println("to configure your MacroPad");
-    }
+    // Display instructions
+    display->setCursor(10, 185);
+    display->setTextColor(ST77XX_GREEN);
+    display->println("Visit this IP in a browser");
+    display->setCursor(10, 200);
+    display->println("to configure your MacroPad");
 }

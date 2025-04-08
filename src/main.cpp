@@ -918,6 +918,16 @@ void loop() {
     
     // Update display
     static unsigned long lastDisplayUpdate = 0;
+    static bool testPatternDrawn = false;
+    
+    // Draw test pattern once at startup
+    if (!testPatternDrawn) {
+        drawTestPattern();
+        testPatternDrawn = true;
+        USBSerial.println("Test pattern drawn at startup");
+        delay(5000); // Show test pattern for 5 seconds
+    }
+    
     if (millis() - lastDisplayUpdate > 1000) { // Update display only once per second
         updateDisplay();
         lastDisplayUpdate = millis();
