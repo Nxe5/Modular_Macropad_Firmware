@@ -2,8 +2,18 @@
 #include "ModuleSetup.h" // For the readJsonFile function
 #include "FileSystemUtils.h"
 #include <Arduino.h> // For ESP.getFreeHeap()
+#include <ArduinoJson.h>
+#include <LittleFS.h>
+#include <USBCDC.h>
+#include "JsonUtils.h" // Include centralized JSON utilities
 
-extern size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor);
+// Global references
+extern USBCDC USBSerial;
+
+// Forward declarations
+extern void createWorkingActionsFile();
+// Function is now declared in JsonUtils.h
+// extern size_t estimateJsonBufferSize(const String& filesize, float multiplier);
 
 String ConfigManager::readFile(const char* filePath) {
     return FileSystemUtils::readFile(filePath);
@@ -18,8 +28,8 @@ std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
     Serial.printf("Components JSON size: %d bytes\n", jsonStr.length());
     Serial.printf("Free heap before parsing: %d bytes\n", ESP.getFreeHeap());
     
-    // Estimate buffer size based on JSON content
-    size_t bufferSize = estimateJsonBufferSize(jsonStr, 1.5);
+    // Estimate buffer size based on JSON content with a 1.5 multiplier
+    size_t bufferSize = estimateJsonBufferSize(jsonStr);
     
     DynamicJsonDocument doc(bufferSize);
     DeserializationError error = deserializeJson(doc, jsonStr);
@@ -77,112 +87,183 @@ std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
     return components;
 }
 
-std::map<String, ActionConfig> ConfigManager::loadActions(const String& filePath) {
+std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) {
     std::map<String, ActionConfig> actions;
     
-    if (!LittleFS.exists(filePath)) {
-        USBSerial.printf("Actions file not found: %s\n", filePath.c_str());
-        return actions;
-    }
+    USBSerial.printf("Loading actions from: %s\n", filePath);
     
+    // Try to read the file
     File file = LittleFS.open(filePath, "r");
     if (!file) {
-        USBSerial.printf("Failed to open actions file: %s\n", filePath.c_str());
-        return actions;
+        USBSerial.printf("Failed to open actions file: %s\n", filePath);
+        
+        // Try alternative location if primary fails
+        const char* altPath = (strncmp(filePath, "/config/", 8) == 0) ? 
+            "/data/config/actions.json" : "/config/actions.json";
+            
+        USBSerial.printf("Trying alternative path: %s\n", altPath);
+        file = LittleFS.open(altPath, "r");
+        
+        if (!file) {
+            USBSerial.printf("Failed to open alternative actions file: %s\n", altPath);
+            
+            // Last resort - create a default file
+            USBSerial.println("Creating default actions file as last resort");
+            createWorkingActionsFile();
+            
+            // Try one more time with the primary path
+            file = LittleFS.open(filePath, "r");
+            if (!file) {
+                USBSerial.println("Still cannot open actions file after creating default");
+                return actions;
+            }
+        }
     }
     
-    // Try to parse with DynamicJsonDocument first
-    DynamicJsonDocument fullDoc(8192);
-    DeserializationError fullError = deserializeJson(fullDoc, file);
-    
-    if (fullError) {
-        USBSerial.printf("ERROR: Full JSON parsing failed: %s\n", fullError.c_str());
-        USBSerial.println("Will try manual parsing instead");
-    } else {
-        USBSerial.println("Full JSON parsing successful!");
+    if (file.size() > 0) {
+        // First try with ArduinoJson library's advanced features
+        size_t fileSize = file.size();
+        USBSerial.printf("File size: %d bytes\n", fileSize);
         
-        // Check for expected structure
-        if (!fullDoc.containsKey("actions")) {
-            USBSerial.println("ERROR: Missing 'actions' key in JSON");
-        } else if (!fullDoc["actions"].containsKey("layer-config")) {
-            USBSerial.println("ERROR: Missing 'layer-config' key in JSON");
+        // Calculate buffer size with safety margin - use a much larger multiplier for safety
+        size_t bufferSize = 16384; // Start with a 16KB buffer
+        if (fileSize > 3000) {
+            bufferSize = 32768; // Use 32KB for larger files
+        }
+        
+        USBSerial.printf("Allocating JSON buffer of %d bytes (free heap: %d)\n", 
+                     bufferSize, ESP.getFreeHeap());
+        
+        DynamicJsonDocument fullDoc(bufferSize);
+        
+        DeserializationError error = deserializeJson(fullDoc, file);
+        
+        if (error) {
+            USBSerial.printf("Failed to parse actions.json with error: %s\n", error.c_str());
+            
+            // Try a simpler memory-efficient approach
+            file.seek(0); // Reset file position
+            String jsonString = file.readString();
+            file.close();
+            
+            USBSerial.println("Calling createWorkingActionsFile to recover from parse error");
+            createWorkingActionsFile();
+            
+            // Try to load the newly created file
+            return loadActions(filePath);
         } else {
-            USBSerial.println("JSON structure appears valid");
+            USBSerial.println("Successfully parsed actions.json");
             
-            // Count configurations
-            JsonObject layerConfig = fullDoc["actions"]["layer-config"];
-            int count = 0;
-            for (JsonPair kv : layerConfig) {
-                count++;
-                USBSerial.printf("Found config for: %s\n", kv.key().c_str());
-            }
-            USBSerial.printf("Found %d button configurations\n", count);
-            
-            // Try to extract configurations
-            for (JsonPair kv : layerConfig) {
-                String componentId = kv.key().c_str();
-                JsonObject config = kv.value().as<JsonObject>();
+            // Extract default layer configuration
+            if (fullDoc.containsKey("actions")) {
+                JsonObject actionsObj = fullDoc["actions"];
                 
-                ActionConfig actionConfig;
-                actionConfig.id = componentId;
+                String defaultLayerName = "default-actions-layer";
                 
-                if (config.containsKey("type")) {
-                    actionConfig.type = config["type"].as<String>();
-                    USBSerial.printf("Component %s has type: %s\n", 
-                                 componentId.c_str(), actionConfig.type.c_str());
+                // Check if a layer name is explicitly provided
+                if (actionsObj.containsKey("layer-name")) {
+                    defaultLayerName = actionsObj["layer-name"].as<String>();
+                    USBSerial.printf("Default layer name: %s\n", defaultLayerName.c_str());
                     
-                    if (config.containsKey("buttonPress") && config["buttonPress"].is<JsonArray>()) {
-                        JsonArray codes = config["buttonPress"].as<JsonArray>();
-                        for (JsonVariant code : codes) {
-                            actionConfig.hidReport.push_back(code.as<String>());
-                        }
-                        USBSerial.printf("  Added %d button press codes\n", actionConfig.hidReport.size());
-                    }
-                    
-                    // Add configuration to map
-                    actions[componentId] = actionConfig;
+                    // Add the layer name as a special action entry so KeyHandler knows it
+                    ActionConfig layerNameConfig;
+                    layerNameConfig.type = "default-layer-name";
+                    layerNameConfig.targetLayer = defaultLayerName;
+                    actions["__default_layer_name__"] = layerNameConfig;
                 }
-            }
-            
-            // Check for additional layers
-            if (fullDoc.containsKey("layers")) {
-                JsonObject layers = fullDoc["layers"];
-                USBSerial.printf("Found %d additional layers\n", layers.size());
                 
-                // Process each additional layer
-                for (JsonPair layerKv : layers) {
-                    String layerName = layerKv.key().c_str();
-                    JsonObject layerConfig = layerKv.value().as<JsonObject>();
+                // Extract the layer-config for the default layer
+                if (actionsObj.containsKey("layer-config")) {
+                    JsonObject layerConfig = actionsObj["layer-config"];
+                    USBSerial.printf("Found %d components in default layer\n", layerConfig.size());
                     
-                    USBSerial.printf("Processing layer: %s\n", layerName.c_str());
-                    
-                    if (layerConfig.containsKey("layer-config")) {
-                        JsonObject buttonConfigs = layerConfig["layer-config"];
+                    // Process each component in this layer
+                    for (JsonPair kv : layerConfig) {
+                        String componentId = kv.key().c_str();
+                        JsonObject config = kv.value().as<JsonObject>();
                         
-                        // Process each button in this layer
-                        for (JsonPair buttonKv : buttonConfigs) {
-                            String componentId = buttonKv.key().c_str();
-                            JsonObject config = buttonKv.value().as<JsonObject>();
+                        ActionConfig actionConfig;
+                        actionConfig.id = componentId;
+                        
+                        if (config.containsKey("type")) {
+                            actionConfig.type = config["type"].as<String>();
+                            USBSerial.printf("Component %s has type: %s\n", 
+                                         componentId.c_str(), actionConfig.type.c_str());
                             
-                            ActionConfig actionConfig;
-                            actionConfig.id = componentId;
-                            
-                            if (config.containsKey("type")) {
-                                actionConfig.type = config["type"].as<String>();
-                                USBSerial.printf("  Component %s has type: %s\n", 
-                                             componentId.c_str(), actionConfig.type.c_str());
-                                
-                                if (config.containsKey("buttonPress") && config["buttonPress"].is<JsonArray>()) {
-                                    JsonArray codes = config["buttonPress"].as<JsonArray>();
-                                    for (JsonVariant code : codes) {
-                                        actionConfig.hidReport.push_back(code.as<String>());
-                                    }
-                                    USBSerial.printf("    Added %d button press codes\n", actionConfig.hidReport.size());
+                            if (config.containsKey("buttonPress") && config["buttonPress"].is<JsonArray>()) {
+                                JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                for (JsonVariant code : codes) {
+                                    actionConfig.hidReport.push_back(code.as<String>());
                                 }
+                                USBSerial.printf("  Added %d button press codes\n", actionConfig.hidReport.size());
+                            }
+                            
+                            if (config.containsKey("macroId")) {
+                                actionConfig.macroId = config["macroId"].as<String>();
+                                USBSerial.printf("  Macro ID: %s\n", actionConfig.macroId.c_str());
+                            }
+                            
+                            if (config.containsKey("targetLayer")) {
+                                actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                USBSerial.printf("  Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                            }
+                            
+                            // Add configuration directly to map for the default layer
+                            actions[componentId] = actionConfig;
+                        }
+                    }
+                }
+                
+                // Check for additional layers
+                if (fullDoc.containsKey("layers")) {
+                    JsonObject layers = fullDoc["layers"];
+                    USBSerial.printf("Found %d additional layers\n", layers.size());
+                    
+                    // Process each additional layer
+                    for (JsonPair layerKv : layers) {
+                        String layerName = layerKv.key().c_str();
+                        JsonObject layerConfig = layerKv.value().as<JsonObject>();
+                        
+                        USBSerial.printf("Processing layer: %s\n", layerName.c_str());
+                        
+                        if (layerConfig.containsKey("layer-config")) {
+                            JsonObject buttonConfigs = layerConfig["layer-config"];
+                            
+                            // Process each button in this layer
+                            for (JsonPair buttonKv : buttonConfigs) {
+                                String componentId = buttonKv.key().c_str();
+                                JsonObject config = buttonKv.value().as<JsonObject>();
                                 
-                                // Add configuration to map with layer prefix
-                                String layerComponentId = layerName + ":" + componentId;
-                                actions[layerComponentId] = actionConfig;
+                                ActionConfig actionConfig;
+                                actionConfig.id = componentId;
+                                
+                                if (config.containsKey("type")) {
+                                    actionConfig.type = config["type"].as<String>();
+                                    USBSerial.printf("  Component %s has type: %s\n", 
+                                                 componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    if (config.containsKey("buttonPress") && config["buttonPress"].is<JsonArray>()) {
+                                        JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.hidReport.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d button press codes\n", actionConfig.hidReport.size());
+                                    }
+                                    
+                                    if (config.containsKey("macroId")) {
+                                        actionConfig.macroId = config["macroId"].as<String>();
+                                        USBSerial.printf("    Macro ID: %s\n", actionConfig.macroId.c_str());
+                                    }
+                                    
+                                    if (config.containsKey("targetLayer")) {
+                                        actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                        USBSerial.printf("    Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                                    }
+                                    
+                                    // Add configuration to map with layer prefix
+                                    String layerComponentId = layerName + ":" + componentId;
+                                    actions[layerComponentId] = actionConfig;
+                                }
                             }
                         }
                     }
@@ -192,211 +273,178 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const String& filePath
             USBSerial.printf("Successfully extracted %d action configurations\n", actions.size());
             return actions;
         }
+    } else {
+        USBSerial.println("Actions file is empty");
+        file.close();
+        
+        // Create default actions
+        createWorkingActionsFile();
+        return loadActions(filePath);
     }
-    
-    // If we're here, we need to try the original manual parsing approach
-    file.seek(0); // Reset file position
-    
-    // Use a smaller buffer for the main document structure
-    const size_t docSize = 1024;
-    StaticJsonDocument<docSize> doc;
-    
-    // Use a separate, small buffer for each button configuration
-    const size_t buttonConfigSize = 512;
-    StaticJsonDocument<buttonConfigSize> buttonConfig;
-    
-    // First read just the structure to find layer-config
-    {
-        // Buffer for reading small chunks
-        char buffer[128];
-        size_t bytesRead = 0;
-        String jsonHeader;
-        
-        // Read enough to get the structure (up to 1024 bytes should be enough)
-        while (file.available() && bytesRead < 1024) {
-            size_t len = file.readBytes(buffer, sizeof(buffer) - 1);
-            buffer[len] = '\0';
-            jsonHeader += buffer;
-            bytesRead += len;
-        }
-        
-        // Reset file position
-        file.seek(0);
-        
-        USBSerial.printf("Read %d bytes of header\n", jsonHeader.length());
-        
-        // Try to parse just to get the structure
-        DeserializationError error = deserializeJson(doc, jsonHeader);
-        if (error) {
-            USBSerial.printf("Error parsing JSON structure: %s\n", error.c_str());
-            return actions;
-        }
-        
-        // Check if the structure is valid
-        if (!doc.containsKey("actions") || !doc["actions"].containsKey("layer-config")) {
-            USBSerial.println("Invalid actions.json format: missing actions or layer-config");
-            return actions;
-        } else {
-            USBSerial.println("Header structure valid, proceeding with manual parsing");
-        }
-    }
-    
-    // Now manually parse the file to extract each button configuration
-    // This is a simple state machine to find and extract button configurations
-    
-    // Buffer for reading line by line
-    char buffer[256];
-    int bufferPos = 0;
-    bool inLayerConfig = false;
-    bool inButtonConfig = false;
-    String currentButtonId;
-    String line;
-    
-    // Read the file line by line
-    while (file.available()) {
-        // Read a line
-        int bytesRead = file.readBytesUntil('\n', buffer, sizeof(buffer) - 1);
-        buffer[bytesRead] = '\0';
-        line = String(buffer);
-        line.trim();
-        
-        // Skip empty lines
-        if (line.length() == 0) {
-            continue;
-        }
-        
-        // Check for layer-config section
-        if (line.indexOf("\"layer-config\":") >= 0) {
-            inLayerConfig = true;
-            continue;
-        }
-        
-        // Check for end of layer-config section
-        if (inLayerConfig && line.indexOf("}") == 0) {
-            inLayerConfig = false;
-            continue;
-        }
-        
-        // Process button configurations
-        if (inLayerConfig) {
-            // Look for a button ID
-            int buttonPos = line.indexOf("\"button-");
-            if (buttonPos >= 0) {
-                int endQuote = line.indexOf("\"", buttonPos + 1);
-                if (endQuote > buttonPos) {
-                    currentButtonId = line.substring(buttonPos + 1, endQuote);
-                    inButtonConfig = true;
-                    USBSerial.printf("Found button config: %s\n", currentButtonId.c_str());
-                    
-                    // Create the button config entry with default values
-                    ActionConfig config;
-                    config.id = currentButtonId;
-                    actions[currentButtonId] = config;
-                }
-            }
-            
-            // Look for an encoder ID
-            int encoderPos = line.indexOf("\"encoder-");
-            if (encoderPos >= 0) {
-                int endQuote = line.indexOf("\"", encoderPos + 1);
-                if (endQuote > encoderPos) {
-                    currentButtonId = line.substring(encoderPos + 1, endQuote);
-                    inButtonConfig = true;
-                    USBSerial.printf("Found encoder config: %s\n", currentButtonId.c_str());
-                    
-                    // Create the encoder config entry with default values
-                    ActionConfig config;
-                    config.id = currentButtonId;
-                    actions[currentButtonId] = config;
-                }
-            }
-        }
-        else if (inButtonConfig) {
-            // Process button configuration details
-            
-            // Check for end of button config
-            if (line.indexOf("},") == 0 || line.indexOf("}") == 0) {
-                inButtonConfig = false;
-                currentButtonId = "";
-                continue;
-            }
-            
-            // Extract type
-            int typePos = line.indexOf("\"type\": \"");
-            if (typePos >= 0) {
-                int endQuote = line.indexOf("\"", typePos + 9);
-                if (endQuote > typePos) {
-                    String type = line.substring(typePos + 9, endQuote);
-                    actions[currentButtonId].type = type;
-                    USBSerial.printf("  Type: %s\n", type.c_str());
-                }
-            }
-            
-            // Extract macro ID
-            int macroPos = line.indexOf("\"macro\": \"");
-            if (macroPos >= 0) {
-                int endQuote = line.indexOf("\"", macroPos + 10);
-                if (endQuote > macroPos) {
-                    String macroId = line.substring(macroPos + 10, endQuote);
-                    actions[currentButtonId].macroId = macroId;
-                    USBSerial.printf("  Macro: %s\n", macroId.c_str());
-                }
-            }
-            
-            // Extract target layer
-            int layerPos = line.indexOf("\"targetLayer\": \"");
-            if (layerPos >= 0) {
-                int endQuote = line.indexOf("\"", layerPos + 15);
-                if (endQuote > layerPos) {
-                    String targetLayer = line.substring(layerPos + 15, endQuote);
-                    actions[currentButtonId].targetLayer = targetLayer;
-                    USBSerial.printf("  Target Layer: %s\n", targetLayer.c_str());
-                }
-            }
-            
-            // Extract button press (HID report)
-            int buttonPressPos = line.indexOf("\"buttonPress\": [");
-            if (buttonPressPos >= 0) {
-                // Read until the closing bracket
-                String buttonPressData = line.substring(buttonPressPos + 15);
-                bool foundEnd = buttonPressData.indexOf("]") >= 0;
-                
-                // Remove trailing comma and spaces
-                buttonPressData.trim();
-                if (buttonPressData.endsWith(",")) {
-                    buttonPressData = buttonPressData.substring(0, buttonPressData.length() - 1);
-                }
-                
-                // Process the HID codes
-                int startPos = 0;
-                int endPos = buttonPressData.indexOf(",");
-                
-                while (endPos >= 0) {
-                    String code = buttonPressData.substring(startPos, endPos);
-                    code.trim();
-                    if (code.startsWith("\"") && code.endsWith("\"")) {
-                        code = code.substring(1, code.length() - 1);
-                    }
-                    actions[currentButtonId].hidReport.push_back(code);
-                    startPos = endPos + 1;
-                    endPos = buttonPressData.indexOf(",", startPos);
-                }
-                
-                // Add the last code
-                String lastCode = buttonPressData.substring(startPos);
-                lastCode.trim();
-                if (lastCode.startsWith("\"") && lastCode.endsWith("\"")) {
-                    lastCode = lastCode.substring(1, lastCode.length() - 1);
-                }
-                if (lastCode.length() > 0) {
-                    actions[currentButtonId].hidReport.push_back(lastCode);
-                }
-                
-                USBSerial.printf("  Added %d HID codes\n", actions[currentButtonId].hidReport.size());
-            }
-        }
-    }
-    
+
     file.close();
     return actions;
+}
+
+bool ConfigManager::parseComponent(JsonObjectConst obj, Component& component) {
+    if (!obj.containsKey("id") || !obj.containsKey("type")) {
+        return false;
+    }
+    
+    component.id = obj["id"].as<String>();
+    component.type = obj["type"].as<String>();
+    
+    if (obj.containsKey("size") && obj["size"].is<JsonObjectConst>()) {
+        JsonObjectConst size = obj["size"];
+        component.rows = size["rows"] | 1;
+        component.cols = size["columns"] | 1;
+    } else {
+        component.rows = 1;
+        component.cols = 1;
+    }
+    
+    if (obj.containsKey("start_location") && obj["start_location"].is<JsonObjectConst>()) {
+        JsonObjectConst location = obj["start_location"];
+        component.startRow = location["row"] | 0;
+        component.startCol = location["column"] | 0;
+    } else {
+        component.startRow = 0;
+        component.startCol = 0;
+    }
+    
+    if (component.type == "encoder" && obj.containsKey("with_button")) {
+        component.withButton = obj["with_button"] | false;
+    } else {
+        component.withButton = false;
+    }
+    
+    return true;
+}
+
+std::map<String, DisplayMode> ConfigManager::loadDisplayModes(const char* filePath) {
+    std::map<String, DisplayMode> displayModes;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return displayModes;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(8192);  // Allocate a large buffer
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    if (error) {
+        USBSerial.printf("Error parsing display modes JSON: %s\n", error.c_str());
+        return displayModes;
+    }
+    
+    // Check if "modes" key exists
+    if (!doc.containsKey("modes")) {
+        USBSerial.println("No 'modes' section found in display config");
+        return displayModes;
+    }
+    
+    // Process each mode
+    JsonObject modes = doc["modes"];
+    for (JsonPair pair : modes) {
+        String modeName = pair.key().c_str();
+        JsonObject modeConfig = pair.value();
+        
+        DisplayMode mode;
+        mode.name = modeName;
+        mode.active = modeConfig["active"] | false;
+        mode.template_file = modeConfig["template_file"] | "";
+        mode.description = modeConfig["description"] | "";
+        mode.refresh_rate = modeConfig["refresh_rate"] | 1000;  // Default to 1 second
+        
+        // Store without loading elements - they'll be loaded on demand
+        displayModes[modeName] = mode;
+    }
+    
+    return displayModes;
+}
+
+std::vector<DisplayElement> ConfigManager::loadDisplayElements(const char* filePath, const String& modeName) {
+    std::vector<DisplayElement> elements;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return elements;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(16384);  // Larger buffer for elements
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    if (error) {
+        USBSerial.printf("Error parsing display elements JSON: %s\n", error.c_str());
+        return elements;
+    }
+    
+    // Check if mode exists
+    if (!doc.containsKey("modes") || !doc["modes"].containsKey(modeName) || 
+        !doc["modes"][modeName].containsKey("elements")) {
+        USBSerial.printf("No elements found for mode: %s\n", modeName.c_str());
+        return elements;
+    }
+    
+    // Process each element
+    JsonArray elementsArray = doc["modes"][modeName]["elements"];
+    for (JsonObject elementObj : elementsArray) {
+        DisplayElement element;
+        
+        element.type = elementObj["type"] | 0;
+        element.x = elementObj["x"] | 0;
+        element.y = elementObj["y"] | 0;
+        element.width = elementObj["width"] | 0;
+        element.height = elementObj["height"] | 0;
+        element.text = elementObj["text"] | "";
+        element.variable = elementObj["variable"] | "";
+        element.alignment = elementObj["alignment"] | "left";
+        element.color = elementObj["color"] | 0xFFFF;  // Default white
+        element.size = elementObj["size"] | 1;
+        element.end_x = elementObj["end_x"] | 0;
+        element.end_y = elementObj["end_y"] | 0;
+        element.filled = elementObj["filled"] | false;
+        
+        elements.push_back(element);
+    }
+    
+    return elements;
+}
+
+ModuleInfo ConfigManager::loadModuleInfo(const char* filePath) {
+    ModuleInfo info;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return info;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    if (error) {
+        USBSerial.printf("Error parsing module info JSON: %s\n", error.c_str());
+        return info;
+    }
+    
+    // Fill in the struct
+    info.name = doc["name"] | "Modular Macropad";
+    info.version = doc["version"] | "1.0.0";
+    info.author = doc["author"] | "User";
+    info.description = doc["description"] | "Default configuration";
+    info.moduleSize = doc["module-size"] | "full";
+    
+    // Grid size is nested
+    if (doc.containsKey("gridSize")) {
+        info.gridRows = doc["gridSize"]["rows"] | 3;
+        info.gridCols = doc["gridSize"]["columns"] | 4;
+    } else {
+        info.gridRows = 3;
+        info.gridCols = 4;
+    }
+    
+    return info;
 }

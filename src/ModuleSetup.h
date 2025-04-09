@@ -3,6 +3,7 @@
 #define MODULE_INFO_H
 
 #include <Arduino.h>
+#include "JsonUtils.h" // Include the centralized JSON utility functions
 
 enum class ModuleType {
     FULL_MAIN,
@@ -37,7 +38,8 @@ struct ModuleCapabilities {
     uint8_t numLayers;
 };
 
-struct ModuleInfo {
+// Renamed from ModuleInfo to ModuleSystemInfo to avoid conflicts
+struct ModuleSystemInfo {
     String macAddress;
     String infoJson;
     String componentsJson;
@@ -53,6 +55,9 @@ struct ModuleInfo {
 // Add this external declaration
 extern ModuleCapabilities currentModule;
 
+// Helper function for JSON buffer size estimation is now declared in JsonUtils.h
+
+// Function declarations
 void initializeModuleInfo();
 ModuleCapabilities getModuleCapabilities();
 String getModuleInfoJson();

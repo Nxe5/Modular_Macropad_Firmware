@@ -18,19 +18,23 @@ EncoderHandler::EncoderHandler(uint8_t numEncoders)
       encoderConfigs(nullptr)
 {
     // Validate input parameters
-    if (numEncoders > MAX_ENCODERS) {
-        USBSerial.println("Invalid encoder initialization parameters");
-        return;
+    if (numEncoders == 0 || numEncoders > MAX_ENCODERS) {
+        numEncoders = 1; // Default to at least one encoder
     }
-
+    
     try {
         // Allocate configuration array
-        encoderConfigs = new EncoderConfig[numEncoders];
+        encoderConfigs = new EncoderConfig[numEncoders]();
 
         // Allocate encoders based on type
         mechanicalEncoders = new Encoder*[numEncoders]();
         as5600Encoders = new AS5600[numEncoders]();
 
+        // Initialize encoder pointers to nullptr
+        for (uint8_t i = 0; i < numEncoders; i++) {
+            mechanicalEncoders[i] = nullptr;
+        }
+        
         USBSerial.printf("Encoder Handler initialized with %d encoders\n", numEncoders);
     }
     catch (const std::exception& e) {
@@ -53,6 +57,7 @@ void EncoderHandler::cleanup() {
         for (uint8_t i = 0; i < numEncoders; i++) {
             if (mechanicalEncoders[i]) {
                 delete mechanicalEncoders[i];
+                mechanicalEncoders[i] = nullptr;
             }
         }
         delete[] mechanicalEncoders;
@@ -80,21 +85,35 @@ void EncoderHandler::configureEncoder(
     int8_t direction, 
     uint16_t zeroPosition
 ) {
-    if (encoderIndex >= numEncoders) return;
-
+    if (encoderIndex >= numEncoders) {
+        USBSerial.printf("Error: Invalid encoder index %d\n", encoderIndex);
+        return;
+    }
+    
     EncoderConfig& config = encoderConfigs[encoderIndex];
+    
     config.type = type;
     config.pinA = pinA;
     config.pinB = pinB;
     config.direction = direction;
     config.zeroPosition = zeroPosition;
+    
+    // Reset position tracking
+    config.absolutePosition = 0;
+    config.lastReportedPosition = 0;
+    config.lastRawPosition = 0;
+    
+    USBSerial.printf("Configured encoder %d: Type=%d, PinA=%d, PinB=%d, Dir=%d\n",
+                 encoderIndex, type, pinA, pinB, direction);
 }
 
 void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& actions) {
-    // Clear existing encoder actions
+    USBSerial.println("Loading encoder actions from configuration");
+    
+    // Clear previous actions
     encoderActions.clear();
     
-    // Process each action configuration
+    // Process each action
     for (const auto& pair : actions) {
         const String& id = pair.first;
         const ActionConfig& config = pair.second;
@@ -109,8 +128,18 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                 action.cwHidReport.resize(HID_KEYBOARD_REPORT_SIZE, 0);
                 action.ccwHidReport.resize(HID_KEYBOARD_REPORT_SIZE, 0);
                 
-                // Load clockwise action
-                if (!config.clockwise.empty()) {
+                // Load clockwise action - check if exists in struct
+                if (config.hidReport.size() > 0) {
+                    // Backward compatibility with older config format that uses hidReport
+                    uint8_t report[HID_KEYBOARD_REPORT_SIZE] = {0};
+                    if (HIDHandler::hexReportToBinary(config.hidReport, report, HID_KEYBOARD_REPORT_SIZE)) {
+                        for (int i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
+                            action.cwHidReport[i] = report[i];
+                        }
+                    }
+                }
+                else if (config.clockwise.size() > 0) {
+                    // Use new clockwise field if available
                     uint8_t report[HID_KEYBOARD_REPORT_SIZE] = {0};
                     if (HIDHandler::hexReportToBinary(config.clockwise, report, HID_KEYBOARD_REPORT_SIZE)) {
                         for (int i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
@@ -120,7 +149,7 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                 }
                 
                 // Load counterclockwise action
-                if (!config.counterclockwise.empty()) {
+                if (config.counterclockwise.size() > 0) {
                     uint8_t report[HID_KEYBOARD_REPORT_SIZE] = {0};
                     if (HIDHandler::hexReportToBinary(config.counterclockwise, report, HID_KEYBOARD_REPORT_SIZE)) {
                         for (int i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
@@ -135,7 +164,16 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                 action.ccwConsumerReport.resize(HID_CONSUMER_REPORT_SIZE, 0);
                 
                 // Load clockwise action
-                if (!config.clockwise.empty()) {
+                if (config.consumerReport.size() > 0) {
+                    // Backward compatibility with older config format
+                    uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
+                    if (HIDHandler::hexReportToBinary(config.consumerReport, report, HID_CONSUMER_REPORT_SIZE)) {
+                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                            action.cwConsumerReport[i] = report[i];
+                        }
+                    }
+                }
+                else if (config.clockwise.size() > 0) {
                     uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
                     if (HIDHandler::hexReportToBinary(config.clockwise, report, HID_CONSUMER_REPORT_SIZE)) {
                         for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
@@ -145,7 +183,7 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                 }
                 
                 // Load counterclockwise action
-                if (!config.counterclockwise.empty()) {
+                if (config.counterclockwise.size() > 0) {
                     uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
                     if (HIDHandler::hexReportToBinary(config.counterclockwise, report, HID_CONSUMER_REPORT_SIZE)) {
                         for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
@@ -164,8 +202,6 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
     
     USBSerial.printf("Loaded actions for %d encoders\n", encoderActions.size());
 }
-
-
 
 void EncoderHandler::begin() {
     if (!encoderConfigs) {

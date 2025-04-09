@@ -6,7 +6,7 @@
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
 #include <ArduinoJson.h>
-#include "EncoderHandler.h" // Include this for EncoderType and EncoderConfig
+#include "ConfigManager.h" // Include this for DisplayElement and DisplayMode structs
 
 // Pin definitions for the display
 #define TFT_CS    37   // Chip select pin
@@ -25,32 +25,6 @@ enum DisplayElementType {
     ELEMENT_LINE,
     ELEMENT_RECT,
     ELEMENT_CIRCLE
-};
-
-// Display element structure
-struct DisplayElement {
-    DisplayElementType type;
-    int x;
-    int y;
-    uint16_t color;
-    // For text elements
-    String text;
-    uint8_t size;
-    // For lines
-    int end_x;
-    int end_y;
-    // For shapes
-    int width;
-    int height;
-    bool filled;
-};
-
-// Display mode structure
-struct DisplayMode {
-    String name;
-    String description;
-    uint32_t refresh_rate;
-    std::vector<DisplayElement> elements;
 };
 
 // Function declarations

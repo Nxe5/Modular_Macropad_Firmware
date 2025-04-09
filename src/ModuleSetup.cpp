@@ -2,6 +2,7 @@
 #include "ModuleSetup.h"
 #include "FileSystemUtils.h"
 #include "LEDHandler.h"
+#include "JsonUtils.h"
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 #include <USB.h>
@@ -10,7 +11,7 @@
 #include <USBCDC.h>
 
 ModuleCapabilities currentModule;
-ModuleInfo moduleInfo;
+ModuleSystemInfo moduleInfo;
 extern USBCDC USBSerial;
 
 
@@ -51,36 +52,6 @@ String readJsonFile(const char* filePath) {
     return content;
 }
 
-// Estimate the required buffer size for a JSON document
-size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor) {
-    size_t len = jsonString.length();
-    
-    // Count the number of objects, arrays, and string literals to help with the estimate
-    int numObjects = 0;
-    int numArrays = 0;
-    int numStrings = 0;
-    
-    for (size_t i = 0; i < len; i++) {
-        char c = jsonString[i];
-        if (c == '{') numObjects++;
-        else if (c == '[') numArrays++;
-        else if (c == '"') numStrings++;
-    }
-    
-    // Base size (each object or array adds some overhead)
-    size_t baseSize = len;
-    
-    // Add overhead for objects and arrays
-    baseSize += (numObjects * 20); // Approximate overhead per object
-    baseSize += (numArrays * 10);  // Approximate overhead per array
-    
-    // Apply the safety factor
-    size_t estimatedSize = baseSize * safetyFactor;
-    
-    // Ensure a minimum size
-    return max(estimatedSize, (size_t)512);
-}
-
 // Process components JSON with increased memory allocation
 bool processComponentsJson(const String& jsonStr) {
     USBSerial.println("Processing components JSON configuration");
@@ -88,7 +59,7 @@ bool processComponentsJson(const String& jsonStr) {
     // Debug free memory before allocation
     USBSerial.printf("Free heap before allocation: %d bytes\n", ESP.getFreeHeap());
     
-    // Estimate required buffer size
+    // Estimate required buffer size - using default safety factor
     size_t bufferSize = estimateJsonBufferSize(jsonStr);
     
     // Create document with calculated size

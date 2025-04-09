@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 #include <USBCDC.h>
+#include "JsonUtils.h" // Include the centralized JSON utility functions
 
 // Define to enable power monitoring (requires pin 34 connected to VBUS via voltage divider)
 // #define ENABLE_POWER_MONITORING
@@ -113,9 +114,6 @@ extern bool animationActive;
 extern uint8_t animationMode;
 extern uint16_t animationSpeed;
 extern std::map<String, ButtonLEDMapping> buttonLEDMap;
-
-// Forward declaration of estimateJsonBufferSize from ModuleSetup.cpp
-extern size_t estimateJsonBufferSize(const String& jsonString, float safetyFactor = 1.4);
 
 // Function declarations
 void updateLED(uint8_t index);

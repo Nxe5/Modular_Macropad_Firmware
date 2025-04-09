@@ -46,6 +46,9 @@ extern "C" {
 
 #include "FileSystemUtils.h"
 
+// Forward declarations
+void createWorkingActionsFile();
+
 // Initialize USB devices
 USBHIDKeyboard Keyboard;
 USBHIDConsumerControl ConsumerControl;
@@ -270,7 +273,85 @@ void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t
     Serial.println("Pin configuration complete\n");
 }
 
-// initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
+// Function to debug actions configuration
+void debugActionsConfig() {
+    auto actions = ConfigManager::loadActions("/config/actions.json");
+    
+    USBSerial.println("\n=== Actions Configuration Debug ===");
+    for (const auto& pair : actions) {
+        USBSerial.printf("Button ID: %s, Type: %s\n", 
+                    pair.first.c_str(), 
+                    pair.second.type.c_str());
+        
+        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
+            USBSerial.print("  Consumer Report: ");
+            for (const auto& hex : pair.second.consumerReport) {
+                USBSerial.printf("%s ", hex.c_str());
+            }
+            USBSerial.println();
+        }
+    }
+    USBSerial.println("==================================\n");
+}
+
+// Helper function to create a working actions.json file
+void createWorkingActionsFile() {
+    USBSerial.println("\n==== CREATING WORKING ACTIONS FILE ====");
+    
+    // Create a simple but working actions.json file with common buttons configured
+    // Using a simpler structure with just enough buttons to test
+    String workingActions = R"({
+  "actions": {
+    "layer-name": "default-actions-layer",
+    "active": true,
+    "layer-config": {
+      "button-1": {"type": "cycle-layer"},
+      "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+      "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+      "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+    }
+  },
+  "layers": {
+    "Nxe5-actions-layer": {
+      "active": true,
+      "layer-config": {
+        "button-1": {"type": "cycle-layer"},
+        "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+        "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+        "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+      }
+    }
+  }
+})";
+
+    // Create both possible directory paths
+    FileSystemUtils::createDirPath("/data/config");
+    FileSystemUtils::createDirPath("/config");
+    
+    // Save to both possible locations to ensure it's found
+    bool success1 = FileSystemUtils::writeFile("/data/config/actions.json", workingActions);
+    bool success2 = FileSystemUtils::writeFile("/config/actions.json", workingActions);
+    
+    if (success1 && success2) {
+        USBSerial.println("Created working actions.json files in both locations");
+    } else if (success1) {
+        USBSerial.println("Created working actions.json file in /data/config only");
+    } else if (success2) {
+        USBSerial.println("Created working actions.json file in /config only");
+    } else {
+        USBSerial.println("Failed to create working actions.json file in either location");
+    }
+}
+
+void keyboardTask(void *pvParameters) {
+    while (true) {
+        if (keyHandler) {
+            keyHandler->updateKeys();
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // Scan every 10ms (adjust as needed)
+    }
+}
+
 void initializeKeyHandler() {
     const uint8_t rows = 5;
     const uint8_t cols = 5;
@@ -308,7 +389,22 @@ void initializeKeyHandler() {
         // Load actions configuration
         USBSerial.println("Loading key action configuration...");
         auto actions = ConfigManager::loadActions("/config/actions.json");
+        
+        if (actions.empty()) {
+            USBSerial.println("WARNING: No actions loaded from config file!");
+            
+            // Try the backup default configuration or create a simple one
+            USBSerial.println("Creating default working actions configuration");
+            createWorkingActionsFile();
+            actions = ConfigManager::loadActions("/data/config/actions.json");
+        }
+        
         keyHandler->loadKeyConfiguration(actions);
+        
+        // Make sure to apply the current layer configurations
+        String currentLayer = keyHandler->getCurrentLayer();
+        USBSerial.printf("Applying current layer: %s\n", currentLayer.c_str());
+        keyHandler->applyLayerToActionMap(currentLayer);
         
         USBSerial.println("Key handler initialization complete");
     } else {
@@ -407,37 +503,6 @@ void initializeEncoderHandler() {
         USBSerial.println("Encoder handler initialized successfully");
     } else {
         USBSerial.println("No encoders found in configuration");
-    }
-}
-
-
-// Function to debug actions configuration
-void debugActionsConfig() {
-    auto actions = ConfigManager::loadActions("/config/actions.json");
-    
-    USBSerial.println("\n=== Actions Configuration Debug ===");
-    for (const auto& pair : actions) {
-        USBSerial.printf("Button ID: %s, Type: %s\n", 
-                    pair.first.c_str(), 
-                    pair.second.type.c_str());
-        
-        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
-            USBSerial.print("  Consumer Report: ");
-            for (const auto& hex : pair.second.consumerReport) {
-                USBSerial.printf("%s ", hex.c_str());
-            }
-            USBSerial.println();
-        }
-    }
-    USBSerial.println("==================================\n");
-}
-
-void keyboardTask(void *pvParameters) {
-    while (true) {
-        if (keyHandler) {
-            keyHandler->updateKeys();
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));  // Scan every 10ms (adjust as needed)
     }
 }
 
@@ -581,71 +646,6 @@ void dumpActionsFile() {
     }
     
     USBSerial.println("==== END OF DUMP ====\n");
-}
-
-// Helper function to create a working actions.json file
-void createWorkingActionsFile() {
-    USBSerial.println("\n==== CREATING WORKING ACTIONS FILE ====");
-    
-    // Create a simple but working actions.json file with common buttons configured
-    // Using a simpler structure with just enough buttons to test
-    String workingActions = R"({
-  "actions": {
-    "layer-name": "default-actions-layer",
-    "active": true,
-    "layer-config": {
-      "button-1": {
-        "type": "cycle-layer"
-      },
-      "button-2": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
-      },
-      "button-3": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]
-      },
-      "button-4": {
-        "type": "hid",
-        "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
-      }
-    }
-  },
-  "layers": {
-    "Nxe5-actions-layer": {
-      "active": true,
-      "layer-config": {
-        "button-1": {
-          "type": "cycle-layer"
-        },
-        "button-2": {
-          "type": "hid",
-          "buttonPress": ["0x00", "0x00", "0x1B", "0x00", "0x00", "0x00", "0x00", "0x00"]
-        },
-        "button-3": {
-          "type": "hid",
-          "buttonPress": ["0x00", "0x00", "0x12", "0x00", "0x00", "0x00", "0x00", "0x00"]
-        },
-        "button-4": {
-          "type": "hid",
-          "buttonPress": ["0x00", "0x00", "0x18", "0x00", "0x00", "0x00", "0x00", "0x00"]
-        }
-      }
-    }
-  }
-})";
-
-    // Create the data/config directory if it doesn't exist
-    FileSystemUtils::createDirPath("/data/config");
-    
-    // Save to the correct location
-    bool success = FileSystemUtils::writeFile("/data/config/actions.json", workingActions);
-    
-    if (success) {
-        USBSerial.println("Created working actions.json file");
-    } else {
-        USBSerial.println("Failed to create working actions.json file");
-    }
 }
 
 // Helper function for detailed filesystem diagnostics

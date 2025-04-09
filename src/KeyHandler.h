@@ -58,7 +58,6 @@ public:
     // Layer management
     bool switchToLayer(const String& layerName);
     String getCurrentLayer() const { return currentLayer; }
-    bool loadLayerConfiguration(const String& layerName, const std::map<String, ActionConfig>& actions);
     bool isLayerAvailable(const String& layerName) const;
     std::vector<String> getAvailableLayers() const;
     
@@ -82,6 +81,9 @@ public:
 
     // Add method to cycle to next layer
     bool cycleToNextLayer();
+    
+    // Add method to apply layer to the action map
+    void applyLayerToActionMap(const String& layerName);
     
 private:
     void cleanup();
