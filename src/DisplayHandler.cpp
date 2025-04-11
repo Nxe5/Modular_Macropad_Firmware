@@ -27,6 +27,10 @@ std::map<String, DisplayMode> displayModes;
 String lastNormalContent = "";
 static bool screenInitialized = false;
 
+// Add these global variables at the top with other globals
+bool backgroundLoaded = false;
+uint16_t* backgroundBuffer = nullptr;
+
 void initializeDisplay() {
     USBSerial.println("Starting display initialization...");
     
@@ -49,27 +53,44 @@ void initializeDisplay() {
     display->setRotation(1);
     display->fillScreen(ST77XX_BLACK);
     
-    // Draw initial test pattern for landscape orientation
-    display->fillRect(0, 0, 93, 240, ST77XX_RED);
-    display->fillRect(93, 0, 93, 240, ST77XX_GREEN);
-    display->fillRect(186, 0, 94, 240, ST77XX_BLUE);
+    // Mark the screen as initialized before doing anything else
+    screenInitialized = true;
     
-    display->setTextColor(ST77XX_WHITE);
-    display->setTextSize(3);
-    display->setCursor(100, 100);
-    display->println("Hello");
-    display->setCursor(100, 140);
-    display->println("Andrew!");
-    
-    USBSerial.println("Test pattern drawn - display ready");
-    
-    // Load display configuration
+    // Load display configuration first
     loadDisplayConfig();
     
-    // Set initial delay before switching to active mode
-    temporaryMessageTimeout = millis() + 3000;
-    temporaryMessageActive = true;
-    screenInitialized = true;
+    // Load background image
+    loadBackgroundImage();
+    
+    // Show welcome splash screen
+    display->fillScreen(ST77XX_BLACK);
+    display->setTextSize(4);
+    display->setTextColor(ST77XX_WHITE);
+    
+    // Center "Welcome!" text
+    int16_t x1, y1;
+    uint16_t w, h;
+    const char* welcomeText = "Welcome!";
+    display->getTextBounds(welcomeText, 0, 0, &x1, &y1, &w, &h);
+    display->setCursor((240 - w) / 2, 100);
+    display->println(welcomeText);
+    
+    // Delay to show welcome screen
+    delay(2000);
+    
+    // Skip all intermediate screens and go directly to the main display
+    USBSerial.println("Going directly to main display");
+    
+    // Make sure to completely disable temporary message handling
+    temporaryMessageActive = false;
+    
+    // Set the active mode to "main" to use our new layout
+    activeMode = "main";
+    
+    // Display the main layout directly
+    displayMainLayout();
+    
+    USBSerial.println("Display setup complete");
 }
 
 Adafruit_ST7789* getDisplay() {
@@ -85,12 +106,20 @@ void printText(const char* text, int x, int y, uint16_t color, uint8_t size) {
 }
 
 void drawTestPattern() {
-    if (!display || !screenInitialized) {
+    if (!display) {
         USBSerial.println("Cannot draw test pattern - display not initialized");
         return;
     }
     
-    USBSerial.println("Drawing manual test pattern");
+    // Force screen initialization if display exists
+    if (!screenInitialized) {
+        screenInitialized = true;
+    }
+    
+    USBSerial.println("Drawing diagnostic test pattern");
+    
+    // Save the current state for restoration
+    bool wasTemporaryMessageActive = temporaryMessageActive;
     
     // Clear the screen
     display->fillScreen(ST77XX_BLACK);
@@ -103,131 +132,82 @@ void drawTestPattern() {
     // Draw some text
     display->setTextColor(ST77XX_WHITE);
     display->setTextSize(2);
-    display->setCursor(60, 80);
-    display->println("TEST PATTERN");
+    display->setCursor(50, 80);
+    display->println("DIAGNOSTIC TEST");
     
     display->setTextSize(1);
     display->setCursor(20, 120);
-    display->println("If you can see this, display works!");
+    display->println("Display is working correctly");
     
     // Draw a line
     display->drawLine(10, 150, 200, 150, ST77XX_YELLOW);
     
-    USBSerial.println("Test pattern drawn");
+    USBSerial.println("Diagnostic test pattern drawn");
+    
+    // Note: This is only for diagnostics, we don't set temporaryMessageActive
+    // to avoid interfering with normal operation
 }
 
 void updateDisplay() {
-    // Rate limit display updates to prevent flickering
-    uint32_t currentTime = millis();
-    if (currentTime - lastDisplayUpdate < currentMode.refresh_rate) {
-        return;
-    }
-    lastDisplayUpdate = currentTime;
-    
-    // Variables for display are available but won't be logged every time
-    // Only uncomment for debugging if needed
-    /*
-    USBSerial.println("\n=== AVAILABLE VARIABLES FOR DISPLAY ====");
-    USBSerial.printf("current_mode: %s\n", currentMode.name.c_str());
-    USBSerial.printf("wifi_status: %s\n", WiFiManager::isConnected() ? "Connected" : "Disconnected");
-    USBSerial.printf("ip_address: %s\n", WiFiManager::getLocalIP().toString().c_str());
-    USBSerial.printf("layer: %s\n", keyHandler ? keyHandler->getCurrentLayer().c_str() : "default");
-    USBSerial.printf("macro_status: %s\n", (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready");
-    USBSerial.printf("SSID: %s\n", WiFiManager::getSSID().c_str());
-    USBSerial.printf("Is AP Mode: %s\n", WiFiManager::isAPMode() ? "Yes" : "No");
-    USBSerial.println("========================================\n");
-    */
-    
-    // Check if we need to clear a temporary message
-    if (temporaryMessageActive) {
-        checkTemporaryMessage();
-        if (!temporaryMessageActive && activeMode != "") {
-            // Switch to active mode after temporary message
-            activateDisplayMode(activeMode);
-        }
-        return;
-    }
-    
     // Only update if display is initialized
     if (!display) {
         USBSerial.println("ERROR: Display object is NULL");
         return;
     }
     
-    if (!screenInitialized) {
-        USBSerial.println("ERROR: Screen not initialized");
+    // Ensure screen is marked as initialized if display exists
+    if (!screenInitialized && display) {
+        screenInitialized = true;
+    }
+    
+    // Rate limit display updates to prevent flickering
+    uint32_t currentTime = millis();
+    if (currentTime - lastDisplayUpdate < 500) { // Increased to 500ms to reduce flickering
+        return;
+    }
+    lastDisplayUpdate = currentTime;
+    
+    // Check if we need to clear a temporary message
+    if (temporaryMessageActive) {
+        checkTemporaryMessage();
+        if (!temporaryMessageActive) {
+            // Switch to main layout after temporary message
+            displayMainLayout();
+        }
         return;
     }
     
-    // Clear the screen for redraw without logging it every time
-    display->fillScreen(ST77XX_BLACK);
+    // Store current state values to detect changes
+    static String lastLayer = "";
+    static String lastWifiStatus = "";
+    static String lastIpAddress = "";
+    static String lastMacroStatus = "";
     
-    // Draw all elements from current mode
-    // USBSerial.printf("Drawing %d elements from current mode\n", currentMode.elements.size());
+    // Get current state values
+    String currentLayer = keyHandler ? keyHandler->getCurrentLayer() : "default";
+    String currentWifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
+    String currentIpAddress = WiFiManager::getLocalIP().toString();
+    String currentMacroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
     
-    if (currentMode.elements.empty()) {
-        USBSerial.println("WARNING: No elements to draw!");
+    // Check if any state has changed
+    bool stateChanged = (lastLayer != currentLayer) || 
+                        (lastWifiStatus != currentWifiStatus) || 
+                        (lastIpAddress != currentIpAddress) || 
+                        (lastMacroStatus != currentMacroStatus);
+    
+    // Update last state values
+    lastLayer = currentLayer;
+    lastWifiStatus = currentWifiStatus;
+    lastIpAddress = currentIpAddress;
+    lastMacroStatus = currentMacroStatus;
+    
+    // If no state has changed, skip redrawing to prevent flicker
+    if (!stateChanged) {
+        return;
     }
     
-    for (const auto& element : currentMode.elements) {
-        // Removed repetitive element drawing logs
-        switch (element.type) {
-            case ELEMENT_TEXT: {
-                String processedText = element.text;
-                // USBSerial.printf("Processing text: %s\n", element.text.c_str());
-                
-                // Check for and replace variables without logging each replacement
-                if (element.text.indexOf("{current_mode}") >= 0) {
-                    processedText.replace("{current_mode}", currentMode.name);
-                }
-                
-                if (element.text.indexOf("{wifi_status}") >= 0) {
-                    String wifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
-                    processedText.replace("{wifi_status}", wifiStatus);
-                }
-                
-                if (element.text.indexOf("{ip_address}") >= 0) {
-                    String ipAddress = WiFiManager::getLocalIP().toString();
-                    processedText.replace("{ip_address}", ipAddress);
-                }
-                
-                if (element.text.indexOf("{layer}") >= 0) {
-                    String layer = keyHandler ? keyHandler->getCurrentLayer() : "default";
-                    processedText.replace("{layer}", layer);
-                }
-                
-                if (element.text.indexOf("{macro_status}") >= 0) {
-                    String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
-                    processedText.replace("{macro_status}", macroStatus);
-                }
-                
-                // Removed "After processing" log
-                
-                display->setTextSize(element.size);
-                display->setTextColor(element.color);
-                display->setCursor(element.x, element.y);
-                display->println(processedText);
-                break;
-            }
-            case ELEMENT_LINE:
-                display->drawLine(element.x, element.y, element.end_x, element.end_y, element.color);
-                break;
-            case ELEMENT_RECT:
-                if (element.filled) {
-                    display->fillRect(element.x, element.y, element.width, element.height, element.color);
-                } else {
-                    display->drawRect(element.x, element.y, element.width, element.height, element.color);
-                }
-                break;
-            case ELEMENT_CIRCLE:
-                if (element.filled) {
-                    display->fillCircle(element.x, element.y, element.width/2, element.color);
-                } else {
-                    display->drawCircle(element.x, element.y, element.width/2, element.color);
-                }
-                break;
-        }
-    }
+    // Display the main layout
+    displayMainLayout();
 }
 
 void loadDisplayConfig() {
@@ -364,28 +344,136 @@ void loadDisplayConfig() {
 }
 
 void activateDisplayMode(const String& modeName) {
-    USBSerial.printf("Activating display mode: %s\n", modeName.c_str());
+    USBSerial.println("Activating display mode: " + modeName);
     
-    if (displayModes.count(modeName) > 0) {
-        USBSerial.printf("Mode found in displayModes map\n");
-        USBSerial.printf("Original mode has %d elements\n", displayModes[modeName].elements.size());
+    // Set the active mode
+    activeMode = modeName;
+    
+    // If it's the main mode, display our new layout
+    if (modeName == "main" || modeName == "config") {
+        // Make sure background is loaded
+        if (!backgroundLoaded) {
+            loadBackgroundImage();
+        }
         
+        // Display the main layout
+        displayMainLayout();
+        return;
+    }
+    
+    // For other modes, use the existing display logic
+    if (displayModes.count(modeName) > 0) {
         // Make a deep copy of the mode
         currentMode = displayModes[modeName];
-        activeMode = modeName;
         
-        USBSerial.printf("Activated display mode: %s\n", modeName.c_str());
-        USBSerial.printf("Mode has %d elements\n", currentMode.elements.size());
+        // Clear the screen before switching modes for clean transition
+        display->fillScreen(ST77XX_BLACK);
         
-        // Debug the elements
-        for (const auto& element : currentMode.elements) {
-            USBSerial.printf("Element type: %d, x: %d, y: %d\n", element.type, element.x, element.y);
-            if (element.type == ELEMENT_TEXT) {
-                USBSerial.printf("Text content: %s\n", element.text.c_str());
+        // Always ensure the title is set and centered correctly
+        // - This is critical to prevent title from disappearing on refresh
+        bool titleFound = false;
+        
+        for (auto& element : currentMode.elements) {
+            if (element.type == ELEMENT_TEXT && element.y <= 30) {
+                // This is the title element
+                element.text = "0cho Labs Macropad";
+                element.size = 2;
+                titleFound = true;
+                
+                // Center the text perfectly
+                int16_t x1, y1;
+                uint16_t w, h;
+                display->setTextSize(element.size);
+                display->getTextBounds(element.text.c_str(), 0, 0, &x1, &y1, &w, &h);
+                element.x = (240 - w) / 2; // Set x position to center text exactly
+                
+                USBSerial.printf("Centered title at x=%d with width=%d\n", element.x, w);
             }
         }
+        
+        // If no title was found, add one
+        if (!titleFound && modeName == "config") {
+            DisplayElement titleElement;
+            titleElement.type = ELEMENT_TEXT;
+            titleElement.text = "0cho Labs Macropad";
+            titleElement.size = 2;
+            titleElement.y = 25;
+            titleElement.color = ST77XX_WHITE;
+            
+            // Center the text perfectly
+            int16_t x1, y1;
+            uint16_t w, h;
+            display->setTextSize(titleElement.size);
+            display->getTextBounds(titleElement.text.c_str(), 0, 0, &x1, &y1, &w, &h);
+            titleElement.x = (240 - w) / 2; // Set x position to center text exactly
+            
+            USBSerial.printf("Added centered title at x=%d with width=%d\n", titleElement.x, w);
+            
+            // Add to the beginning of elements so it's drawn first
+            currentMode.elements.insert(currentMode.elements.begin(), titleElement);
+        }
+        
+        // Force a full redraw of all elements
+        for (const auto& element : currentMode.elements) {
+            switch (element.type) {
+                case ELEMENT_TEXT: {
+                    String processedText = element.text;
+                    
+                    // Process any variables in the text
+                    if (element.text.indexOf("{layer}") >= 0) {
+                        String layer = keyHandler ? keyHandler->getCurrentLayer() : "default";
+                        processedText.replace("{layer}", layer);
+                    }
+                    
+                    if (element.text.indexOf("{wifi_status}") >= 0) {
+                        String wifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
+                        processedText.replace("{wifi_status}", wifiStatus);
+                    }
+                    
+                    if (element.text.indexOf("{ip_address}") >= 0) {
+                        String ipAddress = WiFiManager::getLocalIP().toString();
+                        processedText.replace("{ip_address}", ipAddress);
+                    }
+                    
+                    if (element.text.indexOf("{macro_status}") >= 0) {
+                        String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
+                        processedText.replace("{macro_status}", macroStatus);
+                    }
+                    
+                    if (element.text.indexOf("{current_mode}") >= 0) {
+                        processedText.replace("{current_mode}", currentMode.name);
+                    }
+                    
+                    // Draw the text
+                    display->setTextSize(element.size);
+                    display->setTextColor(element.color);
+                    display->setCursor(element.x, element.y);
+                    display->println(processedText);
+                    break;
+                }
+                case ELEMENT_LINE:
+                    display->drawLine(element.x, element.y, element.end_x, element.end_y, element.color);
+                    break;
+                case ELEMENT_RECT:
+                    if (element.filled) {
+                        display->fillRect(element.x, element.y, element.width, element.height, element.color);
+                    } else {
+                        display->drawRect(element.x, element.y, element.width, element.height, element.color);
+                    }
+                    break;
+                case ELEMENT_CIRCLE:
+                    if (element.filled) {
+                        display->fillCircle(element.x, element.y, element.width/2, element.color);
+                    } else {
+                        display->drawCircle(element.x, element.y, element.width/2, element.color);
+                    }
+                    break;
+            }
+        }
+        
+        USBSerial.println("Main display activated");
     } else {
-        USBSerial.printf("Display mode not found: %s\n", modeName.c_str());
+        USBSerial.println("Display mode not found: " + modeName);
     }
 }
 
@@ -403,112 +491,213 @@ void handleEncoder(int encoderPosition) {
 }
 
 void showTemporaryMessage(const char* message, uint32_t duration) {
-    if (!display) return;
-    
-    USBSerial.printf("Display: %s\n", message);
-    
-    temporaryMessageActive = true;
-    temporaryMessageTimeout = millis() + duration;
-    
-    // Clear the display
-    display->fillScreen(ST77XX_BLACK);
-    
-    // Print the message
-    display->setTextSize(2);
-    display->setTextColor(ST77XX_WHITE);
-    display->setCursor(10, 10);
-    display->println("MacroPad");
-    
-    display->drawLine(10, 35, 230, 35, ST77XX_BLUE);
-    
-    // Display multiline message with word wrapping
-    display->setTextSize(1);
-    String msg = message;
-    int yPos = 50;
-    int maxWidth = 220;
-    int charWidth = 6; // Approximate width of each character
-    int spaceWidth = 6;
-    int lineHeight = 15;
-    
-    String word = "";
-    int lineWidth = 0;
-    
-    display->setCursor(10, yPos);
-    
-    for (int i = 0; i < msg.length(); i++) {
-        char c = msg[i];
-        if (c == '\n') {
-            if (word.length() > 0) {
-                display->print(word);
-                word = "";
-            }
-            yPos += lineHeight;
-            display->setCursor(10, yPos);
-            lineWidth = 0;
-        } else if (c == ' ') {
-            if (lineWidth + word.length() * charWidth > maxWidth) {
-                yPos += lineHeight;
-                display->setCursor(10, yPos);
-                lineWidth = 0;
-            }
-            word += c;
-        } else {
-            word += c;
-        }
+    if (!display || !screenInitialized) {
+        USBSerial.println("Cannot show temporary message - display not initialized");
+        return;
     }
-    display->print(word);
+    
+    // Save current state
+    temporaryMessageActive = true;
+    
+    // Calculate message bounds for centering
+    int16_t x1, y1;
+    uint16_t msgWidth, msgHeight;
+    int fontSize = 2;  // Larger font size for better visibility
+    
+    // Prepare for text measurement
+    display->setTextSize(fontSize);
+    
+    // Get actual text bounds
+    display->getTextBounds(message, 0, 0, &x1, &y1, &msgWidth, &msgHeight);
+    
+    // Calculate centered position
+    int msgX = (240 - msgWidth) / 2;
+    int msgY = 110;  // Vertically centered position
+    
+    // Clear previous message area - use whole screen width to be safe
+    display->fillRect(0, msgY - msgHeight - 10, 240, msgHeight * 2 + 20, ST77XX_BLACK);
+    
+    // Draw a background box for better visibility - make it wider than the text
+    int boxPadding = 10;
+    display->fillRect(msgX - boxPadding, msgY - boxPadding, 
+                     msgWidth + (boxPadding * 2), msgHeight + (boxPadding * 2), 
+                     ST77XX_BLUE);
+    
+    // Now draw the message with white text
+    display->setTextColor(ST77XX_WHITE);
+    display->setCursor(msgX, msgY);
+    display->println(message);
+    
+    // Update the timeout
+    temporaryMessageTimeout = millis() + duration;
 }
 
 void checkTemporaryMessage() {
-    if (!temporaryMessageActive) return;
-    
-    if (millis() >= temporaryMessageTimeout) {
+    if (temporaryMessageActive && millis() > temporaryMessageTimeout) {
+        // Clear the temporary message flag
         temporaryMessageActive = false;
-        display->fillScreen(ST77XX_BLACK);
-        // Don't reset screenInitialized - this was causing the display to stop working
+        
+        // We don't want to reset screenInitialized to false here
+        // as it's causing the "ERROR: Screen not initialized" errors
+        
+        // Don't reset lastDisplayUpdate - allow the next updateDisplay call to evaluate
+        // the refresh rate interval on its own to avoid quick successive redraws
     }
 }
 
 void displayWiFiInfo(bool isAPMode, const String& ipAddress, const String& ssid) {
-    if (!display) return;
+    // Just a stub - we don't want this function to do anything
+    // as it was causing the screen refresh issues
+    return;
+}
+
+void loadBackgroundImage() {
+    USBSerial.println("Starting background image loading...");
     
-    // Cache the WiFi info to prevent redrawing if nothing changed
-    static String lastIPAddress = "";
-    static String lastSSID = "";
-    static bool lastAPMode = false;
-    
-    // Only update if information has actually changed
-    if (lastIPAddress == ipAddress && lastSSID == ssid && lastAPMode == isAPMode) {
+    if (backgroundLoaded) {
+        USBSerial.println("Background already loaded, skipping");
         return;
     }
     
-    // Update cache
-    lastIPAddress = ipAddress;
-    lastSSID = ssid;
-    lastAPMode = isAPMode;
+    // Allocate buffer for the background (240x280 pixels)
+    USBSerial.println("Allocating background buffer...");
+    backgroundBuffer = (uint16_t*)malloc(240 * 280 * sizeof(uint16_t));
+    if (!backgroundBuffer) {
+        USBSerial.println("ERROR: Failed to allocate background buffer");
+        return;
+    }
+    USBSerial.printf("Background buffer allocated at address: %p\n", (void*)backgroundBuffer);
     
-    // Clear WiFi info area
-    display->fillRect(0, 145, 240, 80, ST77XX_BLACK);
+    // Create a more visible gradient background
+    USBSerial.println("Creating gradient background...");
+    for (int y = 0; y < 280; y++) {
+        for (int x = 0; x < 240; x++) {
+            // Create a more visible gradient for testing
+            // Red increases from left to right
+            uint8_t red = map(x, 0, 240, 0, 31);
+            // Green increases from top to bottom
+            uint8_t green = map(y, 0, 280, 0, 31);
+            // Blue stays constant for a base color
+            uint8_t blue = 16;
+            
+            // Convert to RGB565 format
+            uint16_t color = ((red & 0xF8) << 8) | ((green & 0xFC) << 3) | (blue >> 3);
+            backgroundBuffer[y * 240 + x] = color;
+        }
+    }
     
-    // Display connection mode
+    // Verify buffer contents
+    USBSerial.printf("First pixel color: 0x%04X\n", backgroundBuffer[0]);
+    USBSerial.printf("Last pixel color: 0x%04X\n", backgroundBuffer[240 * 280 - 1]);
+    
+    backgroundLoaded = true;
+    USBSerial.println("Background gradient created successfully");
+}
+
+void displayBackgroundImage() {
+    USBSerial.println("Starting background display...");
+    
+    if (!backgroundLoaded) {
+        USBSerial.println("ERROR: Background not loaded");
+        return;
+    }
+    
+    if (!backgroundBuffer) {
+        USBSerial.println("ERROR: Background buffer is null");
+        return;
+    }
+    
+    if (!display) {
+        USBSerial.println("ERROR: Display not initialized");
+        return;
+    }
+    
+    USBSerial.println("Copying background to display...");
+    
+    // Keep rotation 2 for background
+    display->setRotation(2);  // 180 degrees for background
+    
+    // Clear the screen first
+    display->fillScreen(ST77XX_BLACK);
+    
+    // Set up the display window
+    display->startWrite();
+    display->setAddrWindow(0, 0, 240, 280);
+    
+    // Write the pixels in smaller chunks to avoid potential buffer issues
+    const int CHUNK_SIZE = 1024;
+    for (int i = 0; i < 240 * 280; i += CHUNK_SIZE) {
+        int remaining = (240 * 280) - i;
+        int chunk = min(CHUNK_SIZE, remaining);
+        display->writePixels(backgroundBuffer + i, chunk);
+    }
+    
+    display->endWrite();
+    USBSerial.println("Background displayed successfully");
+}
+
+void displayMainLayout() {
+    USBSerial.println("Starting main layout display...");
+    
+    if (!display) {
+        USBSerial.println("ERROR: Display not initialized");
+        return;
+    }
+    
+    // First display the background with rotation 2
+    if (!backgroundLoaded) {
+        USBSerial.println("Background not loaded, loading now...");
+        loadBackgroundImage();
+    }
+    
+    USBSerial.println("Displaying background...");
+    displayBackgroundImage();
+    
+    // Now set rotation 1 for text (landscape)
+    display->setRotation(1);
+    
+    // Define colors
+    uint16_t textColor = ST77XX_WHITE;
+    uint16_t accentColor = ST77XX_GREEN;
+    uint16_t shadowColor = ST77XX_BLACK;
+    
+    // Set text properties
+    display->setTextColor(textColor);
     display->setTextSize(1);
-    display->setCursor(10, 145);
-    display->setTextColor(ST77XX_CYAN);
-    display->println(isAPMode ? "Mode: Access Point" : "Mode: Station");
     
-    // Display SSID
-    display->setCursor(10, 155);
-    display->setTextColor(ST77XX_WHITE);
-    display->println("SSID: " + ssid);
+    // Helper function for drawing text with shadow
+    auto drawTextWithShadow = [&](const char* text, int16_t x, int16_t y) {
+        display->setTextColor(shadowColor);
+        display->setCursor(x + 1, y + 1);
+        display->print(text);
+        display->setTextColor(textColor);
+        display->setCursor(x, y);
+        display->print(text);
+    };
     
-    // Display IP Address
-    display->setCursor(10, 165);
-    display->println("IP: " + ipAddress);
+    // Draw title - adjusted for landscape orientation
+    drawTextWithShadow("Modular Macropad", 10, 10);
     
-    // Display instructions
-    display->setCursor(10, 185);
-    display->setTextColor(ST77XX_GREEN);
-    display->println("Visit this IP in a browser");
-    display->setCursor(10, 200);
-    display->println("to configure your MacroPad");
+    // Draw underline - adjusted for landscape orientation
+    display->drawFastHLine(10, 25, 220, accentColor);
+    
+    // Draw info section - adjusted for landscape orientation
+    int startY = 40;
+    int lineHeight = 20;
+    
+    // Get current values
+    String wifiStatus = WiFiManager::isConnected() ? WiFiManager::getSSID() : "Disconnected";
+    String ipAddress = WiFiManager::getLocalIP().toString();
+    String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
+    String layerName = keyHandler ? keyHandler->getCurrentLayer() : "default";
+    
+    // Draw info lines - adjusted for landscape orientation
+    drawTextWithShadow(("WiFi: " + wifiStatus).c_str(), 10, startY);
+    drawTextWithShadow(("IP: " + ipAddress).c_str(), 10, startY + lineHeight);
+    drawTextWithShadow(("Macro: " + macroStatus).c_str(), 10, startY + lineHeight * 2);
+    drawTextWithShadow(("Layer: " + layerName).c_str(), 10, startY + lineHeight * 3);
+    
+    // Update display
+    display->endWrite();
+    USBSerial.println("Main layout display completed");
 }

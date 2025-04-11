@@ -36,6 +36,11 @@ void updateDisplay();
 void loadDisplayConfig();
 void activateDisplayMode(const String& modeName);
 void handleEncoder(int encoderPosition);
+void displayMainLayout();  // New function for main layout
+
+// Background image functions
+void loadBackgroundImage();
+void displayBackgroundImage();
 
 // Function to show a temporary message on the display
 void showTemporaryMessage(const char* message, uint32_t duration = 3000);

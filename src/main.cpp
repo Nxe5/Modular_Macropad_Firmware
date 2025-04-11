@@ -917,21 +917,7 @@ void loop() {
     updateLEDs();
     
     // Update display
-    static unsigned long lastDisplayUpdate = 0;
-    static bool testPatternDrawn = false;
-    
-    // Draw test pattern once at startup
-    if (!testPatternDrawn) {
-        drawTestPattern();
-        testPatternDrawn = true;
-        USBSerial.println("Test pattern drawn at startup");
-        delay(5000); // Show test pattern for 5 seconds
-    }
-    
-    if (millis() - lastDisplayUpdate > 1000) { // Update display only once per second
-        updateDisplay();
-        lastDisplayUpdate = millis();
-    }
+    updateDisplay();
     
     // Update macro execution
     updateMacroHandler();
@@ -1003,6 +989,19 @@ void loop() {
             createWorkingActionsFile();
         } else if (command == "fsdiag") {
             runFilesystemDiagnostics();
+        } else if (command == "display") {
+            // Force a display redraw
+            USBSerial.println("Forcing display refresh...");
+            extern void activateDisplayMode(const String& modeName);
+            extern String getCurrentMode();
+            activateDisplayMode(getCurrentMode());
+        } else if (command == "testdisplay") {
+            // Run the display diagnostic pattern
+            USBSerial.println("Running display diagnostic pattern...");
+            extern void drawTestPattern();
+            drawTestPattern();
+            delay(5000);  // Show pattern for 5 seconds
+            activateDisplayMode(getCurrentMode());  // Return to normal display
         } else if (command == "help") {
             USBSerial.println("\nAvailable commands:");
             USBSerial.println("  diagnostics - Run all filesystem tests in sequence");
@@ -1015,6 +1014,8 @@ void loop() {
             USBSerial.println("  dumpactions - Dump the contents of actions.json file");
             USBSerial.println("  fixactions - Create a working actions.json file with default button mappings");
             USBSerial.println("  fsdiag - Run detailed filesystem diagnostics");
+            USBSerial.println("  display - Force a display refresh");
+            USBSerial.println("  testdisplay - Show display diagnostic pattern");
             USBSerial.println("  help - Show this help message");
         }
     }

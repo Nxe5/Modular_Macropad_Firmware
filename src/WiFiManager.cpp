@@ -65,12 +65,13 @@ void WiFiManager::setupWiFi() {
         USBSerial.println(IP.toString());
         _isConnected = true;
         
-        // Show on display
-        showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
+        // Remove display message to prevent screen refresh
+        // showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
     } else {
         // Setup STA mode
         USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
-        showTemporaryMessage(("Connecting to WiFi: " + _ssid).c_str(), 3000);
+        // Remove display message to prevent screen refresh
+        // showTemporaryMessage(("Connecting to WiFi: " + _ssid).c_str(), 3000);
         
         WiFi.mode(WIFI_STA);
         WiFi.begin(_ssid.c_str(), _password.c_str());
@@ -93,8 +94,8 @@ void WiFiManager::setupWiFi() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Show on display
-            showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
             
             // Broadcast connection status
             broadcastStatus();
@@ -102,8 +103,8 @@ void WiFiManager::setupWiFi() {
             USBSerial.println("Failed to connect in the initial attempt. Will retry in the background.");
             _isConnected = false;
             
-            // Show on display
-            showTemporaryMessage("WiFi connection failed.\nRetrying in background...", 3000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage("WiFi connection failed.\nRetrying in background...", 3000);
         }
     }
 }
@@ -1996,8 +1997,8 @@ void WiFiManager::update() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Show on display
-            showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
             
             // Broadcast connection status
             broadcastStatus();
@@ -2006,8 +2007,8 @@ void WiFiManager::update() {
             if (millis() - _connectAttemptStart > CONNECT_TIMEOUT) {
                 USBSerial.println("WiFi connection timed out. Switching to AP mode.");
                 
-                // Show on display
-                showTemporaryMessage("WiFi connection timed out.\nSwitching to AP mode...", 3000);
+                // Remove display message to prevent screen refresh
+                // showTemporaryMessage("WiFi connection timed out.\nSwitching to AP mode...", 3000);
                 
                 // Switch to AP mode
                 _apMode = true;
