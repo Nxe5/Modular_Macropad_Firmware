@@ -356,6 +356,7 @@ std::map<String, DisplayMode> ConfigManager::loadDisplayModes(const char* filePa
         mode.template_file = modeConfig["template_file"] | "";
         mode.description = modeConfig["description"] | "";
         mode.refresh_rate = modeConfig["refresh_rate"] | 1000;  // Default to 1 second
+        mode.backgroundImage = modeConfig["backgroundImage"] | "";  // New field for background image
         
         // Store without loading elements - they'll be loaded on demand
         displayModes[modeName] = mode;

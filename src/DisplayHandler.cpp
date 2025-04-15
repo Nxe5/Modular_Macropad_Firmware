@@ -6,6 +6,7 @@
 #include "HIDHandler.h"
 #include <LittleFS.h>
 #include <Arduino.h>
+#include <JPEGDEC.h> // Include the JPEG decoder library
 
 // External declaration for USBSerial
 extern USBCDC USBSerial;
@@ -30,6 +31,72 @@ static bool screenInitialized = false;
 // Add these global variables at the top with other globals
 bool backgroundLoaded = false;
 uint16_t* backgroundBuffer = nullptr;
+
+// Global JPEG decoder instance
+JPEGDEC jpeg;
+
+// Callback function for JPEGDEC
+// This function is called for each block of pixels decoded by the library
+int jpegDrawCallback(JPEGDRAW *pDraw) {
+    // Check if the background buffer exists
+    if (!backgroundBuffer) {
+        USBSerial.println("ERROR: JPEG callback called but backgroundBuffer is NULL");
+        return 0; // Return 0 to stop decoding
+    }
+    
+    USBSerial.printf("JPEG block: x=%d, y=%d, w=%d, h=%d\n", 
+                   pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight);
+    
+    // Get image dimensions from the JPEG decoder
+    int jpegWidth = jpeg.getWidth();
+    int jpegHeight = jpeg.getHeight();
+    
+    USBSerial.printf("JPEG dimensions: %dx%d, display buffer: 240x280\n", 
+                   jpegWidth, jpegHeight);
+    
+    // Copy the decoded pixel block to the buffer with dimension correction
+    for (int y = 0; y < pDraw->iHeight; y++) {
+        for (int x = 0; x < pDraw->iWidth; x++) {
+            // Calculate source index in the JPEG decode buffer
+            int srcIndex = y * pDraw->iWidth + x;
+            
+            // Get destination x,y based on actual JPEG dimensions vs. display dimensions
+            int destX, destY;
+            
+            if (jpegWidth == 280 && jpegHeight == 240) {
+                // For 280x240 JPEGs (landscape image with swapped dimensions)
+                // We need to transpose the coordinates
+                destX = pDraw->y + y;
+                destY = pDraw->x + x;
+                
+                // Check bounds - don't write outside our 240x280 buffer
+                if (destX >= 280 || destY >= 240) continue;
+            } else {
+                // Standard mapping for correctly dimensioned images
+                destX = pDraw->x + x;
+                destY = pDraw->y + y;
+                
+                // Check bounds
+                if (destX >= 240 || destY >= 280) continue;
+            }
+            
+            // Calculate buffer index from destination coordinates
+            uint32_t bufferIndex = destY * 240 + destX;
+            
+            // Final bounds check
+            if (bufferIndex < (240 * 280)) {
+                // Copy the pixel
+                uint16_t pixel = pDraw->pPixels[srcIndex];
+                backgroundBuffer[bufferIndex] = pixel;
+            } else {
+                USBSerial.printf("WARNING: Buffer index out of bounds: %lu\n", bufferIndex);
+            }
+        }
+    }
+    
+    // Return 1 to continue decoding
+    return 1;
+}
 
 void initializeDisplay() {
     USBSerial.println("Starting display initialization...");
@@ -247,6 +314,16 @@ void loadDisplayConfig() {
         displayMode.description = mode.value()["description"].as<String>();
         displayMode.refresh_rate = mode.value()["refresh_rate"] | DISPLAY_UPDATE_INTERVAL;
         
+        // Properly load the background image path
+        if (mode.value().containsKey("backgroundImage")) {
+            displayMode.backgroundImage = mode.value()["backgroundImage"].as<String>();
+            USBSerial.printf("Loading mode: %s with background image: %s\n", 
+                           displayMode.name.c_str(), displayMode.backgroundImage.c_str());
+        } else {
+            displayMode.backgroundImage = "";
+            USBSerial.printf("Loading mode: %s with no background image\n", displayMode.name.c_str());
+        }
+        
         USBSerial.printf("Loading mode: %s with refresh rate: %d\n", 
                         displayMode.name.c_str(), displayMode.refresh_rate);
         
@@ -344,137 +421,61 @@ void loadDisplayConfig() {
 }
 
 void activateDisplayMode(const String& modeName) {
-    USBSerial.println("Activating display mode: " + modeName);
+    // Load modes from config
+    std::map<String, DisplayMode> modes = ConfigManager::loadDisplayModes(DISPLAY_CONFIG_PATH);
     
-    // Set the active mode
-    activeMode = modeName;
+    USBSerial.printf("Activating display mode: %s\n", modeName.c_str());
     
-    // If it's the main mode, display our new layout
-    if (modeName == "main" || modeName == "config") {
-        // Make sure background is loaded
-        if (!backgroundLoaded) {
-            loadBackgroundImage();
+    // Check if mode exists
+    if (modes.find(modeName) == modes.end()) {
+        USBSerial.println("Mode not found, falling back to default");
+        
+        // Default to first mode if available
+        if (!modes.empty()) {
+            activeMode = modes.begin()->first;
+        } else {
+            activeMode = "test"; // Fallback to hardcoded test mode
         }
-        
-        // Display the main layout
-        displayMainLayout();
-        return;
-    }
-    
-    // For other modes, use the existing display logic
-    if (displayModes.count(modeName) > 0) {
-        // Make a deep copy of the mode
-        currentMode = displayModes[modeName];
-        
-        // Clear the screen before switching modes for clean transition
-        display->fillScreen(ST77XX_BLACK);
-        
-        // Always ensure the title is set and centered correctly
-        // - This is critical to prevent title from disappearing on refresh
-        bool titleFound = false;
-        
-        for (auto& element : currentMode.elements) {
-            if (element.type == ELEMENT_TEXT && element.y <= 30) {
-                // This is the title element
-                element.text = "0cho Labs Macropad";
-                element.size = 2;
-                titleFound = true;
-                
-                // Center the text perfectly
-                int16_t x1, y1;
-                uint16_t w, h;
-                display->setTextSize(element.size);
-                display->getTextBounds(element.text.c_str(), 0, 0, &x1, &y1, &w, &h);
-                element.x = (240 - w) / 2; // Set x position to center text exactly
-                
-                USBSerial.printf("Centered title at x=%d with width=%d\n", element.x, w);
-            }
-        }
-        
-        // If no title was found, add one
-        if (!titleFound && modeName == "config") {
-            DisplayElement titleElement;
-            titleElement.type = ELEMENT_TEXT;
-            titleElement.text = "0cho Labs Macropad";
-            titleElement.size = 2;
-            titleElement.y = 25;
-            titleElement.color = ST77XX_WHITE;
-            
-            // Center the text perfectly
-            int16_t x1, y1;
-            uint16_t w, h;
-            display->setTextSize(titleElement.size);
-            display->getTextBounds(titleElement.text.c_str(), 0, 0, &x1, &y1, &w, &h);
-            titleElement.x = (240 - w) / 2; // Set x position to center text exactly
-            
-            USBSerial.printf("Added centered title at x=%d with width=%d\n", titleElement.x, w);
-            
-            // Add to the beginning of elements so it's drawn first
-            currentMode.elements.insert(currentMode.elements.begin(), titleElement);
-        }
-        
-        // Force a full redraw of all elements
-        for (const auto& element : currentMode.elements) {
-            switch (element.type) {
-                case ELEMENT_TEXT: {
-                    String processedText = element.text;
-                    
-                    // Process any variables in the text
-                    if (element.text.indexOf("{layer}") >= 0) {
-                        String layer = keyHandler ? keyHandler->getCurrentLayer() : "default";
-                        processedText.replace("{layer}", layer);
-                    }
-                    
-                    if (element.text.indexOf("{wifi_status}") >= 0) {
-                        String wifiStatus = WiFiManager::isConnected() ? "Connected" : "Disconnected";
-                        processedText.replace("{wifi_status}", wifiStatus);
-                    }
-                    
-                    if (element.text.indexOf("{ip_address}") >= 0) {
-                        String ipAddress = WiFiManager::getLocalIP().toString();
-                        processedText.replace("{ip_address}", ipAddress);
-                    }
-                    
-                    if (element.text.indexOf("{macro_status}") >= 0) {
-                        String macroStatus = (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready";
-                        processedText.replace("{macro_status}", macroStatus);
-                    }
-                    
-                    if (element.text.indexOf("{current_mode}") >= 0) {
-                        processedText.replace("{current_mode}", currentMode.name);
-                    }
-                    
-                    // Draw the text
-                    display->setTextSize(element.size);
-                    display->setTextColor(element.color);
-                    display->setCursor(element.x, element.y);
-                    display->println(processedText);
-                    break;
-                }
-                case ELEMENT_LINE:
-                    display->drawLine(element.x, element.y, element.end_x, element.end_y, element.color);
-                    break;
-                case ELEMENT_RECT:
-                    if (element.filled) {
-                        display->fillRect(element.x, element.y, element.width, element.height, element.color);
-                    } else {
-                        display->drawRect(element.x, element.y, element.width, element.height, element.color);
-                    }
-                    break;
-                case ELEMENT_CIRCLE:
-                    if (element.filled) {
-                        display->fillCircle(element.x, element.y, element.width/2, element.color);
-                    } else {
-                        display->drawCircle(element.x, element.y, element.width/2, element.color);
-                    }
-                    break;
-            }
-        }
-        
-        USBSerial.println("Main display activated");
     } else {
-        USBSerial.println("Display mode not found: " + modeName);
+        // Switch to requested mode
+        activeMode = modeName;
+        
+        // Reset the background flag when changing modes to ensure
+        // the correct background is loaded for the new mode
+        backgroundLoaded = false;
+        if (backgroundBuffer != nullptr) {
+            free(backgroundBuffer);
+            backgroundBuffer = nullptr;
+        }
     }
+    
+    // Update config file with active mode
+    DynamicJsonDocument doc(4096);
+    
+    // Load current config
+    String configJson = readJsonFile(DISPLAY_CONFIG_PATH);
+    if (configJson.length() > 0) {
+        deserializeJson(doc, configJson);
+    }
+    
+    // Update active mode
+    doc["active_mode"] = activeMode;
+    
+    // Save updated config
+    File configFile = LittleFS.open(DISPLAY_CONFIG_PATH, "w");
+    if (configFile) {
+        serializeJson(doc, configFile);
+        configFile.close();
+        USBSerial.println("Updated active mode in config file");
+    } else {
+        USBSerial.println("Failed to open config file for writing");
+    }
+    
+    // Reset last update time
+    lastDisplayUpdate = 0;
+    
+    // Force immediate display update
+    updateDisplay();
 }
 
 String getCurrentMode() {
@@ -568,7 +569,267 @@ void loadBackgroundImage() {
     }
     USBSerial.printf("Background buffer allocated at address: %p\n", (void*)backgroundBuffer);
     
-    // Create a more visible gradient background
+    // Get current display mode from our local cache (not ConfigManager)
+    String currentModeName = getCurrentMode();
+    bool customImageLoaded = false;
+    
+    // Check if current mode has a background image
+    if (displayModes.count(currentModeName) > 0) {
+        String backgroundImage = displayModes[currentModeName].backgroundImage;
+        
+        USBSerial.printf("Current mode: %s, Background image path: %s\n", 
+                       currentModeName.c_str(), backgroundImage.c_str());
+        
+        if (backgroundImage.length() > 0) {
+            USBSerial.printf("Attempting to load background image: %s\n", backgroundImage.c_str());
+            customImageLoaded = loadBackgroundImageFromFile(backgroundImage);
+            
+            if (customImageLoaded) {
+                USBSerial.println("Successfully loaded custom background image");
+            } else {
+                USBSerial.println("Failed to load custom background image, falling back to gradient");
+            }
+        } else {
+            USBSerial.println("No background image specified for current mode");
+        }
+    } else {
+        USBSerial.printf("Current mode '%s' not found in loaded modes\n", currentModeName.c_str());
+    }
+    
+    // If no custom image was loaded, create a gradient background
+    if (!customImageLoaded) {
+        USBSerial.println("Creating gradient background as fallback...");
+        createGradientBackground();
+    }
+    
+    backgroundLoaded = true;
+}
+
+// Function to load a background image from a file
+bool loadBackgroundImageFromFile(const String& imagePath) {
+    if (!backgroundBuffer) {
+        USBSerial.println("ERROR: Background buffer not allocated before loading image.");
+        return false;
+    }
+
+    USBSerial.printf("Attempting to load image from path: %s\n", imagePath.c_str());
+
+    // Check if file exists with detailed path info
+    if (!LittleFS.exists(imagePath)) {
+        // Log error with more diagnostic info
+        USBSerial.printf("ERROR: Background image file not found: %s\n", imagePath.c_str());
+        
+        // List files in the /images directory to help debugging
+        if (imagePath.startsWith("/images/")) {
+            File dir = LittleFS.open("/images", "r");
+            if (dir && dir.isDirectory()) {
+                USBSerial.println("Available files in /images directory:");
+                File file = dir.openNextFile();
+                while (file) {
+                    USBSerial.printf(" - %s (%d bytes)\n", file.name(), file.size());
+                    file = dir.openNextFile();
+                }
+            } else {
+                USBSerial.println("WARNING: /images directory does not exist or cannot be opened");
+            }
+        }
+        return false;
+    }
+
+    // Get file info for debugging
+    File fileInfo = LittleFS.open(imagePath, "r");
+    if (fileInfo) {
+        USBSerial.printf("File exists: %s (size: %d bytes)\n", imagePath.c_str(), fileInfo.size());
+        fileInfo.close();
+    }
+
+    // Check if file is a JPEG (by extension)
+    bool isJpeg = imagePath.endsWith(".jpg") || imagePath.endsWith(".jpeg");
+
+    if (isJpeg) {
+        USBSerial.println("JPEG format detected. Initializing decoder.");
+        
+        // Open the JPEG file for decoding
+        File jpegFile = LittleFS.open(imagePath, "r");
+        if (!jpegFile) {
+            USBSerial.printf("ERROR: Failed to open JPEG file: %s\n", imagePath.c_str());
+            return false;
+        }
+        
+        // Get file size for debugging
+        size_t fileSize = jpegFile.size();
+        USBSerial.printf("JPEG file size: %u bytes\n", fileSize);
+        
+        // Check if file size is reasonable
+        if (fileSize < 100) {
+            USBSerial.println("ERROR: JPEG file is too small, likely invalid");
+            jpegFile.close();
+            return false;
+        }
+        
+        // Read the entire file into a buffer for decoding
+        uint8_t* jpegBuffer = (uint8_t*)malloc(fileSize);
+        if (!jpegBuffer) {
+            USBSerial.println("ERROR: Failed to allocate JPEG buffer");
+            jpegFile.close();
+            return false;
+        }
+        
+        // Read the file into the buffer
+        size_t bytesRead = jpegFile.read(jpegBuffer, fileSize);
+        jpegFile.close();
+        
+        if (bytesRead != fileSize) {
+            USBSerial.printf("ERROR: Failed to read JPEG file. Read %u of %u bytes\n", bytesRead, fileSize);
+            free(jpegBuffer);
+            return false;
+        }
+        
+        // Check first bytes to confirm it's a JPEG
+        if (jpegBuffer[0] != 0xFF || jpegBuffer[1] != 0xD8) {
+            USBSerial.println("ERROR: File doesn't have JPEG header signature (0xFF 0xD8)");
+            USBSerial.printf("First bytes: 0x%02X 0x%02X 0x%02X 0x%02X\n", 
+                           jpegBuffer[0], jpegBuffer[1], jpegBuffer[2], jpegBuffer[3]);
+            free(jpegBuffer);
+            return false;
+        }
+        
+        // Initialize the JPEG decoder with the file data
+        if (!jpeg.openRAM(jpegBuffer, fileSize, jpegDrawCallback)) {
+            USBSerial.println("ERROR: Failed to initialize JPEG decoder");
+            free(jpegBuffer);
+            return false;
+        }
+        
+        // Get the image information for debugging
+        int width = jpeg.getWidth();
+        int height = jpeg.getHeight();
+        int bpp = jpeg.getBpp();
+        USBSerial.printf("JPEG info: %dx%d, %d bpp\n", width, height, bpp);
+        
+        // Check if the image dimensions are valid
+        if (width <= 0 || height <= 0) {
+            USBSerial.println("ERROR: Invalid JPEG dimensions");
+            free(jpegBuffer);
+            return false;
+        }
+        
+        // Note: we now support both 240x280 and 280x240 images in the jpegDrawCallback function
+        // Just log a warning if the dimensions don't match exactly
+        if ((width != 240 || height != 280) && (width != 280 || height != 240)) {
+            USBSerial.printf("WARNING: JPEG dimensions (%dx%d) don't match display (240x280)\n", width, height);
+            USBSerial.println("The image may be stretched or cropped when displayed");
+        } else {
+            USBSerial.printf("Image dimensions (%dx%d) detected - will transpose if needed\n", width, height);
+        }
+        
+        // Clear the background buffer to ensure no artifacts from previous images
+        memset(backgroundBuffer, 0, 240 * 280 * sizeof(uint16_t));
+        
+        // Decode the JPEG into our buffer (the callback will handle filling the buffer)
+        USBSerial.println("Starting JPEG decoding into background buffer...");
+        int decoded = jpeg.decode(0, 0, 0); // Scale to fit in the display
+        
+        // Clean up the JPEG buffer
+        free(jpegBuffer);
+        
+        if (decoded <= 0) {
+            USBSerial.printf("ERROR: JPEG decoding failed! Error code: %d\n", decoded);
+            // Don't fallback to gradient here - return false to let the caller handle it
+            return false;
+        }
+        
+        USBSerial.println("JPEG decoding successful!");
+        
+        // Verify buffer contents (first and last pixels)
+        USBSerial.printf("First pixel color: 0x%04X\n", backgroundBuffer[0]);
+        USBSerial.printf("Last pixel color: 0x%04X\n", backgroundBuffer[240 * 280 - 1]);
+        
+        // Check if the entire buffer seems to be empty (all black)
+        bool emptyBuffer = true;
+        for (int i = 0; i < min(1000, 240 * 280); i++) {
+            if (backgroundBuffer[i] != 0) {
+                emptyBuffer = false;
+                break;
+            }
+        }
+        
+        if (emptyBuffer) {
+            USBSerial.println("WARNING: Background buffer appears to be empty after decoding");
+            USBSerial.println("This might indicate an issue with the JPEG decoding process");
+        }
+        
+        return true;
+    } else { 
+        // Handle binary RGB565 files (or other formats if needed)
+        USBSerial.println("Non-JPEG format detected. Assuming RGB565 binary file.");
+        File imageFile = LittleFS.open(imagePath, "r");
+        if (!imageFile) {
+            USBSerial.printf("ERROR: Failed to open binary image file: %s\n", imagePath.c_str());
+            return false;
+        }
+        
+        // Check file size - each pixel is 2 bytes for RGB565 format
+        size_t fileSize = imageFile.size();
+        size_t expectedSize = 240 * 280 * 2; // width * height * 2 bytes per pixel
+        USBSerial.printf("Binary file size: %u bytes. Expected size: %u bytes.\n", fileSize, expectedSize);
+
+        if (fileSize != expectedSize) {
+            USBSerial.printf("ERROR: Binary image file size mismatch. Expected %u bytes, got %u bytes\n", 
+                            expectedSize, fileSize);
+            imageFile.close();
+            return false;
+        }
+
+        USBSerial.println("Reading binary RGB565 data into background buffer...");
+        // Read the file in chunks
+        const size_t CHUNK_SIZE = 1024;
+        uint8_t buffer[CHUNK_SIZE];
+        size_t totalRead = 0;
+        size_t pixelIndex = 0;
+
+        while (totalRead < fileSize) {
+            size_t bytesToRead = min((size_t)CHUNK_SIZE, fileSize - totalRead);
+            size_t bytesRead = imageFile.read(buffer, bytesToRead);
+
+            if (bytesRead != bytesToRead) {
+                USBSerial.printf("ERROR: Failed to read binary image data. Expected %u bytes, got %u bytes\n", 
+                               bytesToRead, bytesRead);
+                imageFile.close();
+                return false;
+            }
+
+            // Process the data - each pixel is 2 bytes in RGB565 format (assuming big-endian in file)
+            for (size_t i = 0; i < bytesRead; i += 2) {
+                if (pixelIndex < 240 * 280) {
+                    // Combine two bytes into a 16-bit pixel value
+                    // Order depends on how the .bin file was created (little vs big endian)
+                    // Assuming Big Endian (common for image tools): buffer[i] is high byte, buffer[i+1] is low byte
+                    backgroundBuffer[pixelIndex++] = (buffer[i] << 8) | buffer[i+1];
+                    // If Little Endian: backgroundBuffer[pixelIndex++] = (buffer[i+1] << 8) | buffer[i];
+                }
+            }
+            totalRead += bytesRead;
+        }
+
+        imageFile.close();
+
+        // Verify buffer contents
+        USBSerial.printf("First pixel color after binary load: 0x%04X\n", backgroundBuffer[0]);
+        USBSerial.printf("Last pixel color after binary load: 0x%04X\n", backgroundBuffer[240 * 280 - 1]);
+
+        USBSerial.println("Binary background image loaded successfully");
+        return true;
+    }
+}
+
+// Helper function to create a gradient background
+void createGradientBackground() {
+    if (!backgroundBuffer) {
+        USBSerial.println("ERROR: Background buffer not allocated");
+        return;
+    }
+    
     USBSerial.println("Creating gradient background...");
     for (int y = 0; y < 280; y++) {
         for (int x = 0; x < 240; x++) {
@@ -590,7 +851,6 @@ void loadBackgroundImage() {
     USBSerial.printf("First pixel color: 0x%04X\n", backgroundBuffer[0]);
     USBSerial.printf("Last pixel color: 0x%04X\n", backgroundBuffer[240 * 280 - 1]);
     
-    backgroundLoaded = true;
     USBSerial.println("Background gradient created successfully");
 }
 
@@ -614,23 +874,24 @@ void displayBackgroundImage() {
     
     USBSerial.println("Copying background to display...");
     
-    // Keep rotation 2 for background
-    display->setRotation(2);  // 180 degrees for background
+    // Always use rotation 1 (landscape orientation) for consistent display
+    display->setRotation(1);
     
     // Clear the screen first
     display->fillScreen(ST77XX_BLACK);
     
-    // Set up the display window
+    // Set up the display window for full screen
     display->startWrite();
-    display->setAddrWindow(0, 0, 240, 280);
+    display->setAddrWindow(0, 0, display->width(), display->height());
     
-    // Write the pixels in smaller chunks to avoid potential buffer issues
-    const int CHUNK_SIZE = 1024;
-    for (int i = 0; i < 240 * 280; i += CHUNK_SIZE) {
-        int remaining = (240 * 280) - i;
-        int chunk = min(CHUNK_SIZE, remaining);
-        display->writePixels(backgroundBuffer + i, chunk);
-    }
+    // Get display dimensions in current orientation
+    int dispWidth = display->width();
+    int dispHeight = display->height();
+    USBSerial.printf("Display dimensions in current rotation: %dx%d\n", dispWidth, dispHeight);
+    
+    // Write the pixels directly to the display - this improves performance
+    // and eliminates potential issues with buffer alignment
+    display->writePixels(backgroundBuffer, dispWidth * dispHeight);
     
     display->endWrite();
     USBSerial.println("Background displayed successfully");
@@ -644,7 +905,7 @@ void displayMainLayout() {
         return;
     }
     
-    // First display the background with rotation 2
+    // First display the background
     if (!backgroundLoaded) {
         USBSerial.println("Background not loaded, loading now...");
         loadBackgroundImage();
@@ -653,7 +914,7 @@ void displayMainLayout() {
     USBSerial.println("Displaying background...");
     displayBackgroundImage();
     
-    // Now set rotation 1 for text (landscape)
+    // Keep rotation 1 for text overlay (landscape)
     display->setRotation(1);
     
     // Define colors
@@ -694,10 +955,6 @@ void displayMainLayout() {
     // Draw info lines - adjusted for landscape orientation
     drawTextWithShadow(("WiFi: " + wifiStatus).c_str(), 10, startY);
     drawTextWithShadow(("IP: " + ipAddress).c_str(), 10, startY + lineHeight);
-    drawTextWithShadow(("Macro: " + macroStatus).c_str(), 10, startY + lineHeight * 2);
-    drawTextWithShadow(("Layer: " + layerName).c_str(), 10, startY + lineHeight * 3);
-    
-    // Update display
-    display->endWrite();
-    USBSerial.println("Main layout display completed");
+    drawTextWithShadow(("Layer: " + layerName).c_str(), 10, startY + lineHeight * 2);
+    drawTextWithShadow(("Macro: " + macroStatus).c_str(), 10, startY + lineHeight * 3);
 }

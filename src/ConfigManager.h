@@ -56,6 +56,7 @@ struct DisplayMode {
     String template_file;
     String description;           
     unsigned long refresh_rate;
+    String backgroundImage;
     std::vector<DisplayElement> elements;
 };
 

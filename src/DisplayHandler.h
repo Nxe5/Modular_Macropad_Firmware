@@ -7,6 +7,7 @@
 #include <SPI.h>
 #include <ArduinoJson.h>
 #include "ConfigManager.h" // Include this for DisplayElement and DisplayMode structs
+#include <JPEGDEC.h>  // Include JPEGDEC for function parameter types
 
 // Pin definitions for the display
 #define TFT_CS    37   // Chip select pin
@@ -27,6 +28,9 @@ enum DisplayElementType {
     ELEMENT_CIRCLE
 };
 
+// JPEG decoder callback
+int jpegDrawCallback(JPEGDRAW *pDraw);
+
 // Function declarations
 void initializeDisplay();
 Adafruit_ST7789* getDisplay();
@@ -41,6 +45,8 @@ void displayMainLayout();  // New function for main layout
 // Background image functions
 void loadBackgroundImage();
 void displayBackgroundImage();
+bool loadBackgroundImageFromFile(const String& imagePath);
+void createGradientBackground();
 
 // Function to show a temporary message on the display
 void showTemporaryMessage(const char* message, uint32_t duration = 3000);

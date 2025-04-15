@@ -5,6 +5,7 @@
       "name": "Test Display",
       "description": "Simple test display for debugging",
       "refresh_rate": 2000,
+      "backgroundImage": "/images/background.jpg",
       "elements": [
         {
           "type": "text",
@@ -28,6 +29,7 @@
       "name": "Configuration Display",
       "description": "Shows current configuration and status",
       "refresh_rate": 2000,
+      "backgroundImage": "/images/background.jpg",
       "elements": [
         {
           "type": "text",
