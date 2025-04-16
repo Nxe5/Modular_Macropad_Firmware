@@ -302,25 +302,28 @@ void createWorkingActionsFile() {
     // Using a simpler structure with just enough buttons to test
     String workingActions = R"({
   "actions": {
-    "layer-name": "default-actions-layer",
-    "active": true,
-    "layer-config": {
-      "button-1": {"type": "cycle-layer"},
-      "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]},
-      "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]},
-      "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]}
-    }
-  },
-  "layers": {
-    "Nxe5-actions-layer": {
-      "active": true,
-      "layer-config": {
-        "button-1": {"type": "cycle-layer"},
-        "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]},
-        "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]},
-        "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+    "layers": [
+      {
+        "layer-name": "default-actions-layer",
+        "active": true,
+        "layer-config": {
+          "button-1": {"type": "cycle-layer"},
+          "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+        }
+      },
+      {
+        "layer-name": "Nxe5-actions-layer",
+        "active": false,
+        "layer-config": {
+          "button-1": {"type": "cycle-layer"},
+          "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+        }
       }
-    }
+    ]
   }
 })";
 

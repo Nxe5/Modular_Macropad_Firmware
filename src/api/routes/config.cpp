@@ -124,8 +124,6 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
 }
 
 void setupConfigRoutes(AsyncWebServer *server) {
-  // ... existing routes ...
-
   // Add reports configuration endpoint
   server->on("/api/config/reports", HTTP_GET, handleGetReportsConfig);
 
@@ -149,6 +147,4 @@ void setupConfigRoutes(AsyncWebServer *server) {
     response->addHeader("Access-Control-Allow-Headers", "Content-Type");
     request->send(response);
   });
-
-  // ... rest of existing code ...
 } 

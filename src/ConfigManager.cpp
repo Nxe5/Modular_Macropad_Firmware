@@ -268,6 +268,73 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                         }
                     }
                 }
+                
+                // Check for the new format with array of layers
+                if (fullDoc["actions"].containsKey("layers") && fullDoc["actions"]["layers"].is<JsonArray>()) {
+                    JsonArray layersArray = fullDoc["actions"]["layers"].as<JsonArray>();
+                    USBSerial.printf("Found %d layers in the new format\n", layersArray.size());
+                    
+                    // Process each layer in the array
+                    for (JsonObject layerObj : layersArray) {
+                        if (layerObj.containsKey("layer-name") && layerObj.containsKey("layer-config")) {
+                            String layerName = layerObj["layer-name"].as<String>();
+                            JsonObject layerConfig = layerObj["layer-config"].as<JsonObject>();
+                            
+                            USBSerial.printf("Processing layer from array: %s\n", layerName.c_str());
+                            
+                            // Process each button in this layer
+                            for (JsonPair buttonKv : layerConfig) {
+                                String componentId = buttonKv.key().c_str();
+                                JsonObject config = buttonKv.value().as<JsonObject>();
+                                
+                                ActionConfig actionConfig;
+                                actionConfig.id = componentId;
+                                
+                                if (config.containsKey("type")) {
+                                    actionConfig.type = config["type"].as<String>();
+                                    USBSerial.printf("  Component %s has type: %s\n", 
+                                                 componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    if (config.containsKey("buttonPress") && config["buttonPress"].is<JsonArray>()) {
+                                        JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.hidReport.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d button press codes\n", actionConfig.hidReport.size());
+                                    }
+                                    
+                                    if (config.containsKey("macroId")) {
+                                        actionConfig.macroId = config["macroId"].as<String>();
+                                        USBSerial.printf("    Macro ID: %s\n", actionConfig.macroId.c_str());
+                                    }
+                                    
+                                    if (config.containsKey("targetLayer")) {
+                                        actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                        USBSerial.printf("    Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                                    }
+                                    
+                                    // If this is the first layer and no explicit default was set, use it as default
+                                    if (layerObj == layersArray[0] && !actions.count("__default_layer_name__")) {
+                                        ActionConfig layerNameConfig;
+                                        layerNameConfig.type = "default-layer-name";
+                                        layerNameConfig.targetLayer = layerName;
+                                        actions["__default_layer_name__"] = layerNameConfig;
+                                        USBSerial.printf("Using first layer in array as default: %s\n", layerName.c_str());
+                                    }
+                                    
+                                    // Add configuration to map with layer prefix
+                                    String layerComponentId = layerName + ":" + componentId;
+                                    actions[layerComponentId] = actionConfig;
+                                    
+                                    // If this is the first layer (default) also add without prefix for backward compatibility
+                                    if (layerObj == layersArray[0]) {
+                                        actions[componentId] = actionConfig;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             
             USBSerial.printf("Successfully extracted %d action configurations\n", actions.size());
