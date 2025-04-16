@@ -198,6 +198,23 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                                 USBSerial.printf("  Added %d button press codes\n", actionConfig.hidReport.size());
                             }
                             
+                            // Load encoder-specific fields
+                            if (config.containsKey("clockwise") && config["clockwise"].is<JsonArray>()) {
+                                JsonArray codes = config["clockwise"].as<JsonArray>();
+                                for (JsonVariant code : codes) {
+                                    actionConfig.clockwise.push_back(code.as<String>());
+                                }
+                                USBSerial.printf("  Added %d clockwise codes\n", actionConfig.clockwise.size());
+                            }
+                            
+                            if (config.containsKey("counterclockwise") && config["counterclockwise"].is<JsonArray>()) {
+                                JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                for (JsonVariant code : codes) {
+                                    actionConfig.counterclockwise.push_back(code.as<String>());
+                                }
+                                USBSerial.printf("  Added %d counterclockwise codes\n", actionConfig.counterclockwise.size());
+                            }
+                            
                             if (config.containsKey("macroId")) {
                                 actionConfig.macroId = config["macroId"].as<String>();
                                 USBSerial.printf("  Macro ID: %s\n", actionConfig.macroId.c_str());
@@ -248,6 +265,23 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                                             actionConfig.hidReport.push_back(code.as<String>());
                                         }
                                         USBSerial.printf("    Added %d button press codes\n", actionConfig.hidReport.size());
+                                    }
+                                    
+                                    // Load encoder-specific fields
+                                    if (config.containsKey("clockwise") && config["clockwise"].is<JsonArray>()) {
+                                        JsonArray codes = config["clockwise"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.clockwise.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d clockwise codes\n", actionConfig.clockwise.size());
+                                    }
+                                    
+                                    if (config.containsKey("counterclockwise") && config["counterclockwise"].is<JsonArray>()) {
+                                        JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.counterclockwise.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d counterclockwise codes\n", actionConfig.counterclockwise.size());
                                     }
                                     
                                     if (config.containsKey("macroId")) {
@@ -301,6 +335,23 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                                             actionConfig.hidReport.push_back(code.as<String>());
                                         }
                                         USBSerial.printf("    Added %d button press codes\n", actionConfig.hidReport.size());
+                                    }
+                                    
+                                    // Load encoder-specific fields
+                                    if (config.containsKey("clockwise") && config["clockwise"].is<JsonArray>()) {
+                                        JsonArray codes = config["clockwise"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.clockwise.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d clockwise codes\n", actionConfig.clockwise.size());
+                                    }
+                                    
+                                    if (config.containsKey("counterclockwise") && config["counterclockwise"].is<JsonArray>()) {
+                                        JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                        for (JsonVariant code : codes) {
+                                            actionConfig.counterclockwise.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("    Added %d counterclockwise codes\n", actionConfig.counterclockwise.size());
                                     }
                                     
                                     if (config.containsKey("macroId")) {

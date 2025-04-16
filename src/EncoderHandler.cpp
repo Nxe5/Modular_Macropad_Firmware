@@ -120,6 +120,8 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
         
         // Process only encoder components
         if (id.startsWith("encoder-")) {
+            USBSerial.printf("Processing encoder action: %s\n", id.c_str());
+            
             EncoderAction action;
             action.type = config.type;
             
@@ -162,24 +164,26 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                 // For multimedia type
                 action.cwConsumerReport.resize(HID_CONSUMER_REPORT_SIZE, 0);
                 action.ccwConsumerReport.resize(HID_CONSUMER_REPORT_SIZE, 0);
+                action.buttonPressConsumerReport.resize(HID_CONSUMER_REPORT_SIZE, 0);
                 
                 // Load clockwise action
-                if (config.consumerReport.size() > 0) {
-                    // Backward compatibility with older config format
-                    uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
-                    if (HIDHandler::hexReportToBinary(config.consumerReport, report, HID_CONSUMER_REPORT_SIZE)) {
-                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
-                            action.cwConsumerReport[i] = report[i];
-                        }
-                    }
-                }
-                else if (config.clockwise.size() > 0) {
+                if (config.clockwise.size() > 0) {
                     uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
                     if (HIDHandler::hexReportToBinary(config.clockwise, report, HID_CONSUMER_REPORT_SIZE)) {
                         for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
                             action.cwConsumerReport[i] = report[i];
                         }
+                        // Debug output for loaded clockwise report
+                        USBSerial.printf("Loaded clockwise report for %s: ", id.c_str());
+                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                            USBSerial.printf("0x%02X ", action.cwConsumerReport[i]);
+                        }
+                        USBSerial.println();
+                    } else {
+                        USBSerial.printf("Failed to load clockwise report for %s\n", id.c_str());
                     }
+                } else {
+                    USBSerial.printf("No clockwise report defined for %s\n", id.c_str());
                 }
                 
                 // Load counterclockwise action
@@ -189,7 +193,37 @@ void EncoderHandler::loadEncoderActions(const std::map<String, ActionConfig>& ac
                         for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
                             action.ccwConsumerReport[i] = report[i];
                         }
+                        // Debug output for loaded counterclockwise report
+                        USBSerial.printf("Loaded counterclockwise report for %s: ", id.c_str());
+                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                            USBSerial.printf("0x%02X ", action.ccwConsumerReport[i]);
+                        }
+                        USBSerial.println();
+                    } else {
+                        USBSerial.printf("Failed to load counterclockwise report for %s\n", id.c_str());
                     }
+                } else {
+                    USBSerial.printf("No counterclockwise report defined for %s\n", id.c_str());
+                }
+                
+                // Load button press action - FIXED: Use hidReport instead of buttonPress
+                if (config.hidReport.size() > 0) {
+                    uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
+                    if (HIDHandler::hexReportToBinary(config.hidReport, report, HID_CONSUMER_REPORT_SIZE)) {
+                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                            action.buttonPressConsumerReport[i] = report[i];
+                        }
+                        // Debug output for loaded button press report
+                        USBSerial.printf("Loaded button press report for %s: ", id.c_str());
+                        for (int i = 0; i < HID_CONSUMER_REPORT_SIZE; i++) {
+                            USBSerial.printf("0x%02X ", action.buttonPressConsumerReport[i]);
+                        }
+                        USBSerial.println();
+                    } else {
+                        USBSerial.printf("Failed to load button press report for %s\n", id.c_str());
+                    }
+                } else {
+                    USBSerial.printf("No button press report defined for %s\n", id.c_str());
                 }
             }
             
@@ -302,51 +336,170 @@ void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) 
         USBSerial.println("ERROR: HID Handler not available");
         return;
     }
-
-    // Reduce the delay from 500ms to 50ms
-    delay(50);
     
-    // Predefined volume control reports
-    const uint8_t volumeUp[4] = {0x00, 0x00, 0xE9, 0x00};
-    const uint8_t volumeDown[4] = {0x00, 0x00, 0xEA, 0x00};
-    const uint8_t emptyReport[4] = {0x00, 0x00, 0x00, 0x00};
+    // Get the encoder ID - use 1-based index to match the configuration
+    String encoderId = "encoder-" + String(encoderIndex + 1);
     
-    // INVERT the direction by toggling the clockwise parameter
-    bool actualDirection = !clockwise;  // Invert the direction
+    // Debug output to verify encoder ID
+    USBSerial.printf("Looking for encoder ID: %s\n", encoderId.c_str());
     
-    // Select report based on INVERTED rotation direction
-    const uint8_t* report = actualDirection ? volumeUp : volumeDown;
-    const char* actionName = actualDirection ? "Volume UP" : "Volume DOWN";
-    
-    USBSerial.printf("Encoder %d Action: %s\n", encoderIndex, actionName);
-    
-    // Send consumer report with multiple error checks
-    bool reportSent = false;
-    for (int attempts = 0; attempts < 3; attempts++) {
-        if (hidHandler->sendConsumerReport(report, 4)) {
-            reportSent = true;
-            break;
+    // Check if we have actions configured for this encoder
+    if (encoderActions.find(encoderId) != encoderActions.end()) {
+        EncoderAction& action = encoderActions[encoderId];
+        
+        // Debug output for loaded action
+        USBSerial.printf("Found action for %s, type: %s\n", encoderId.c_str(), action.type.c_str());
+        
+        // No direction inversion - use clockwise directly
+        bool actualDirection = clockwise;
+        
+        if (action.type == "multimedia") {
+            // Use consumer reports for multimedia actions
+            const std::vector<uint8_t>& reportToSend = 
+                actualDirection ? action.cwConsumerReport : action.ccwConsumerReport;
+                
+            if (reportToSend.size() == HID_CONSUMER_REPORT_SIZE) {
+                USBSerial.printf("Encoder %d Action: %s multimedia command\n", 
+                             encoderIndex, actualDirection ? "CW" : "CCW");
+                             
+                // Send consumer report with multiple error checks
+                bool reportSent = false;
+                for (int attempts = 0; attempts < 3; attempts++) {
+                    if (hidHandler->sendConsumerReport(reportToSend.data(), reportToSend.size())) {
+                        reportSent = true;
+                        break;
+                    }
+                    delay(10);
+                }
+                
+                if (!reportSent) {
+                    USBSerial.printf("FAILED to send multimedia command\n");
+                    return;
+                }
+                
+                delay(100);
+                
+                // Release key with empty report
+                uint8_t emptyReport[HID_CONSUMER_REPORT_SIZE] = {0};
+                hidHandler->sendConsumerReport(emptyReport, HID_CONSUMER_REPORT_SIZE);
+            }
         }
-        delay(10);  // Short delay between attempts
-    }
-    
-    if (!reportSent) {
-        USBSerial.printf("FAILED to send %s command\n", actionName);
-        return;
-    }
-    
-    // Reduce delay from 600ms to 100ms
-    delay(100);
-    
-    // Release key
-    for (int attempts = 0; attempts < 3; attempts++) {
-        if (hidHandler->sendConsumerReport(emptyReport, 4)) {
-            break;
+        else if (action.type == "hid") {
+            // Use HID keyboard actions
+            const std::vector<uint8_t>& reportToSend = 
+                actualDirection ? action.cwHidReport : action.ccwHidReport;
+                
+            if (reportToSend.size() == HID_KEYBOARD_REPORT_SIZE) {
+                USBSerial.printf("Encoder %d Action: %s HID command\n", 
+                             encoderIndex, actualDirection ? "CW" : "CCW");
+                             
+                // Send HID report with multiple error checks
+                bool reportSent = false;
+                for (int attempts = 0; attempts < 3; attempts++) {
+                    if (hidHandler->sendKeyboardReport(reportToSend.data(), reportToSend.size())) {
+                        reportSent = true;
+                        break;
+                    }
+                    delay(10);
+                }
+                
+                if (!reportSent) {
+                    USBSerial.printf("FAILED to send HID command\n");
+                    return;
+                }
+                
+                delay(100);
+                
+                // Release key with empty report
+                hidHandler->sendEmptyKeyboardReport();
+            }
         }
-        delay(10);
+    } 
+    else {
+        // No action configured for this encoder
+        USBSerial.printf("Encoder %d: No action configured\n", encoderIndex);
     }
 }
 
+// Add a new function to handle button press actions
+void EncoderHandler::executeEncoderButtonAction(uint8_t encoderIndex, bool pressed) {
+    if (!hidHandler) {
+        USBSerial.println("ERROR: HID Handler not available");
+        return;
+    }
+    
+    // Get the encoder ID - use 1-based index to match the configuration
+    String encoderId = "encoder-" + String(encoderIndex + 1);
+    
+    // Debug output to verify encoder ID
+    USBSerial.printf("Looking for encoder ID: %s\n", encoderId.c_str());
+    
+    // Check if we have actions configured for this encoder
+    if (encoderActions.find(encoderId) != encoderActions.end()) {
+        EncoderAction& action = encoderActions[encoderId];
+        
+        // Debug output for loaded action
+        USBSerial.printf("Found action for %s, type: %s\n", encoderId.c_str(), action.type.c_str());
+        
+        if (action.type == "multimedia") {
+            if (pressed) {
+                // Send button press report
+                if (action.buttonPressConsumerReport.size() == HID_CONSUMER_REPORT_SIZE) {
+                    USBSerial.printf("Encoder %d Button: PRESS multimedia command\n", encoderIndex);
+                    
+                    // Send consumer report with multiple error checks
+                    bool reportSent = false;
+                    for (int attempts = 0; attempts < 3; attempts++) {
+                        if (hidHandler->sendConsumerReport(action.buttonPressConsumerReport.data(), action.buttonPressConsumerReport.size())) {
+                            reportSent = true;
+                            break;
+                        }
+                        delay(10);
+                    }
+                    
+                    if (!reportSent) {
+                        USBSerial.printf("FAILED to send multimedia command\n");
+                        return;
+                    }
+                }
+            } else {
+                // Send empty report to release the button
+                uint8_t emptyReport[HID_CONSUMER_REPORT_SIZE] = {0};
+                hidHandler->sendConsumerReport(emptyReport, HID_CONSUMER_REPORT_SIZE);
+            }
+        }
+        else if (action.type == "hid") {
+            if (pressed) {
+                // Send button press report
+                if (action.cwHidReport.size() == HID_KEYBOARD_REPORT_SIZE) {
+                    USBSerial.printf("Encoder %d Button: PRESS HID command\n", encoderIndex);
+                    
+                    // Send HID report with multiple error checks
+                    bool reportSent = false;
+                    for (int attempts = 0; attempts < 3; attempts++) {
+                        if (hidHandler->sendKeyboardReport(action.cwHidReport.data(), action.cwHidReport.size())) {
+                            reportSent = true;
+                            break;
+                        }
+                        delay(10);
+                    }
+                    
+                    if (!reportSent) {
+                        USBSerial.printf("FAILED to send HID command\n");
+                        return;
+                    }
+                }
+            } else {
+                // Send empty report to release the button
+                hidHandler->sendEmptyKeyboardReport();
+            }
+        }
+    } 
+    else {
+        // No action configured for this encoder
+        USBSerial.printf("Encoder %d: No action configured\n", encoderIndex);
+    }
+}
 
 // Improved AS5600 encoder handling with better noise filtering
 void EncoderHandler::handleAS5600Encoder(uint8_t encoderIndex) {
@@ -431,8 +584,8 @@ void EncoderHandler::handleMechanicalEncoder(uint8_t encoderIndex) {
     long currentPosition = mechanicalEncoders[encoderIndex]->read();
     
     // For mechanical encoders, often they trigger multiple steps at once
-    // Use a minimum change threshold of 2 steps for better reliability
-    static const int MECHANICAL_CHANGE_THRESHOLD = 2;
+    // Use a minimum change threshold of 1 step for better sensitivity
+    static const int MECHANICAL_CHANGE_THRESHOLD = 1;
     
     // Calculate the raw change (use absolutePosition as reference)
     // This avoids adding a new struct member

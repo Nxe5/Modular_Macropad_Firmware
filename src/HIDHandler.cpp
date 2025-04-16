@@ -268,25 +268,52 @@ bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
     
     if (tud_hid_ready()) {
         // For consumer report, we send the 16-bit usage code
-        uint16_t usage = 0;
+        uint16_t consumerCode = 0x0000;
         
         // Map the consumer codes
-        if (report[2] == 0xE9) {
-            usage = 0x00E9; // Volume UP
-            USBSerial.println("Preparing Volume UP Command");
-        } else if (report[2] == 0xEA) {
-            usage = 0x00EA; // Volume DOWN
-            USBSerial.println("Preparing Volume DOWN Command");
+        switch(report[2]) {
+            case 0xE9: // Volume Up
+                consumerCode = 0x00E9;
+                USBSerial.println("Preparing Volume UP Command");
+                break;
+            case 0xEA: // Volume Down
+                consumerCode = 0x00EA;
+                USBSerial.println("Preparing Volume DOWN Command");
+                break;
+            case 0xE2: // Mute
+                consumerCode = 0x00E2;
+                USBSerial.println("Preparing Mute Command");
+                break;
+            case 0xCD: // Play/Pause
+                consumerCode = 0x00CD;
+                USBSerial.println("Preparing Play/Pause Command");
+                break;
+            case 0xB5: // Next Track
+                consumerCode = 0x00B5;
+                USBSerial.println("Preparing Next Track Command");
+                break;
+            case 0xB6: // Previous Track
+                consumerCode = 0x00B6;
+                USBSerial.println("Preparing Previous Track Command");
+                break;
+            case 0xB7: // Stop
+                consumerCode = 0x00B7;
+                USBSerial.println("Preparing Stop Command");
+                break;
+            case 0xB8: // Play
+                consumerCode = 0x00B8;
+                USBSerial.println("Preparing Play Command");
+                break;
         }
         
         USBSerial.printf("Raw Consumer Report: %02X %02X %02X %02X\n",
                          report[0], report[1], report[2], report[3]);
-        USBSerial.printf("Consumer Code: 0x%04X\n", usage);
+        USBSerial.printf("Consumer Code: 0x%04X\n", consumerCode);
         
         bool success = false;
         // Use Report ID 0x04 as defined in your HID descriptor
         for (int attempts = 0; attempts < 3; attempts++) {
-            success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&usage), sizeof(usage));
+            success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&consumerCode), sizeof(consumerCode));
             if (success) {
                 USBSerial.printf("Consumer Report Sent Successfully (Attempt %d)\n", attempts + 1);
                 break;

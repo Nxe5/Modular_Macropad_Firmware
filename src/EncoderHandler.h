@@ -53,6 +53,7 @@ struct EncoderAction {
     // Consumer reports
     std::vector<uint8_t> cwConsumerReport;   // Clockwise consumer report
     std::vector<uint8_t> ccwConsumerReport;  // Counter-clockwise consumer report
+    std::vector<uint8_t> buttonPressConsumerReport;  // Button press consumer report
 };
 
 class EncoderHandler {
@@ -84,11 +85,13 @@ public:
     void printEncoderStates();
     void diagnostics();
 
+    void executeEncoderAction(uint8_t encoderIndex, bool clockwise);
+    void executeEncoderButtonAction(uint8_t encoderIndex, bool pressed);
+
 private:
     void cleanup();
     void handleMechanicalEncoder(uint8_t encoderIndex);
     void handleAS5600Encoder(uint8_t encoderIndex);
-    void executeEncoderAction(uint8_t encoderIndex, bool clockwise);
 
     // Encoder tracking variables
     uint8_t numEncoders;
