@@ -1,1 +1,1 @@
-import{j as m}from"../chunks/Ci48IzLw.js";export{m as component};
+import{j as m}from"../chunks/J8PC6u6A.js";export{m as component};

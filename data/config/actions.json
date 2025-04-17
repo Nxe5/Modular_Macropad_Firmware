@@ -77,10 +77,19 @@
             "buttonPress": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
           },
           "encoder-1": {
-            "type": "multimedia",
-            "clockwise": ["0x00", "0x00", "0xE9", "0x00"],
-            "counterclockwise": ["0x00", "0x00", "0xEA", "0x00"],
-            "buttonPress": ["0x00", "0x00", "0xE2", "0x00"]
+            "type": "encoder",
+            "clockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xE9", "0x00"]
+            },
+            "counterclockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xEA", "0x00"]
+            },
+            "buttonPress": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xE2", "0x00"]
+            }
           }
         }
       },
@@ -160,10 +169,19 @@
             "buttonPress": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
           },
           "encoder-1": {
-            "type": "multimedia",
-            "clockwise": ["0x00", "0x00", "0xB6", "0x00"],
-            "counterclockwise": ["0x00", "0x00", "0xB5", "0x00"],
-            "buttonPress": ["0x00", "0x00", "0xCD", "0x00"]
+            "type": "encoder",
+            "clockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xB6", "0x00"]
+            },
+            "counterclockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xB5", "0x00"]
+            },
+            "buttonPress": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xCD", "0x00"]
+            }
           }
         }
       }

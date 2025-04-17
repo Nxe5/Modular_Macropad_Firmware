@@ -2,6 +2,8 @@
 
 #include "KeyHandler.h"
 #include "HIDHandler.h"
+#include "EncoderHandler.h"  // Include for forwarding encoder button events
+#include "LEDHandler.h"      // Changed from LightingHandler.h
 #include "MacroHandler.h"
 #include "ConfigManager.h"
 #include <LittleFS.h>
@@ -10,6 +12,8 @@
 #include <algorithm> // For std::sort
 
 extern USBCDC USBSerial;
+extern HIDHandler* hidHandler;
+// LEDHandler is not a class, it's just a collection of functions
 extern MacroHandler* macroHandler;
 
 KeyHandler* keyHandler = nullptr;
@@ -469,15 +473,39 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
     }
 
     const KeyConfig& config = actionMap[keyIndex];
-    String buttonId = componentPositions[keyIndex].id;
+    String componentId = componentPositions[keyIndex].id;
     
     USBSerial.printf("Executing action for %s: type=%d, action=%s\n", 
-                 buttonId.c_str(), config.type, 
+                 componentId.c_str(), config.type, 
                  action == KEY_PRESS ? "PRESS" : "RELEASE");
     
+    // Check if this is an encoder button - if so, route to EncoderHandler
+    if (componentId.startsWith("encoder-")) {
+        if (encoderHandler) {
+            // Extract encoder index from ID (encoder-1 -> index 0)
+            int encoderNum = componentId.substring(8).toInt();
+            if (encoderNum > 0) {
+                uint8_t encoderIndex = encoderNum - 1; // Convert 1-based to 0-based index
+                
+                // Forward button event to EncoderHandler
+                USBSerial.printf("Button %s %s - forwarding to EncoderHandler\n", 
+                             componentId.c_str(), 
+                             action == KEY_PRESS ? "PRESSED" : "RELEASED");
+                
+                encoderHandler->executeEncoderButtonAction(encoderIndex, action == KEY_PRESS);
+                
+                // Skip normal KeyHandler processing
+                return;
+            }
+        } else {
+            USBSerial.println("ERROR: encoderHandler is null, can't forward encoder button event");
+        }
+    }
+    
+    // Normal KeyHandler action processing for non-encoder buttons
     if (config.type == ACTION_NONE) {
         USBSerial.printf("DEBUG: No action configured for %s (layer: %s)\n", 
-                     buttonId.c_str(), currentLayer.c_str());
+                     componentId.c_str(), currentLayer.c_str());
         // Print available layers and current configs for debugging
         std::vector<String> layers = getAvailableLayers();
         USBSerial.printf("Available layers (%d): ", layers.size());

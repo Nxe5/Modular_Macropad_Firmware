@@ -20,6 +20,12 @@ struct Component {
     bool withButton;
 };
 
+// Nested encoder action structure to support new format
+struct EncoderActionConfig {
+    String type;
+    std::vector<String> report;
+};
+
 // Action configuration structure
 struct ActionConfig {
     String id;
@@ -28,8 +34,14 @@ struct ActionConfig {
     std::vector<String> consumerReport;
     String macroId;
     String targetLayer;
-    std::vector<String> clockwise;      // Add for encoder support
-    std::vector<String> counterclockwise; // Add for encoder support
+    std::vector<String> clockwise;      // Legacy format for encoder support
+    std::vector<String> counterclockwise; // Legacy format for encoder support
+    std::vector<String> buttonPress;    // Legacy format for encoder button
+    
+    // New format for encoder actions with nested types
+    EncoderActionConfig clockwiseAction;
+    EncoderActionConfig counterclockwiseAction;
+    EncoderActionConfig buttonPressAction;
 };
 
 // Display Element structure - MUST BE DEFINED BEFORE DisplayMode
