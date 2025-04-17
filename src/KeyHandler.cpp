@@ -222,18 +222,74 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
             // Set action type based on the action config
             if (actionConfig.type == "hid") {
                 keyConfig.type = ACTION_HID;
-                // Parse HID report
-                for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)8); i++) {
-                    keyConfig.hidReport[i] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+                
+                // First check for direct report field (new standardized format)
+                if (!actionConfig.report.empty()) {
+                    // Parse HID report from standardized format
+                    for (size_t i = 0; i < std::min(actionConfig.report.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' using standardized format\n", componentId.c_str());
                 }
-                USBSerial.printf("  Loaded HID config for '%s'\n", componentId.c_str());
+                // Then check for new format with buttonPress.report
+                else if (actionConfig.buttonPressAction.type == "hid" && !actionConfig.buttonPressAction.report.empty()) {
+                    // Parse HID report from new format
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPressAction.report.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.buttonPressAction.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' using nested format\n", componentId.c_str());
+                }
+                // Then check legacy formats
+                else if (!actionConfig.hidReport.empty()) {
+                    // Parse HID report from legacy format
+                    for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' using legacy hidReport format\n", componentId.c_str());
+                }
+                // Check buttonPress as fallback for compatibility
+                else if (!actionConfig.buttonPress.empty()) {
+                    // Parse HID report from buttonPress field
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPress.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.buttonPress[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' from legacy buttonPress field\n", componentId.c_str());
+                }
             } else if (actionConfig.type == "multimedia") {
                 keyConfig.type = ACTION_MULTIMEDIA;
-                // Parse consumer report
-                for (size_t i = 0; i < std::min(actionConfig.consumerReport.size(), (size_t)4); i++) {
-                    keyConfig.consumerReport[i] = strtoul(actionConfig.consumerReport[i].c_str(), nullptr, 16);
+                
+                // First check for direct report field (new standardized format)
+                if (!actionConfig.report.empty()) {
+                    // Parse consumer report from standardized format
+                    for (size_t i = 0; i < std::min(actionConfig.report.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' using standardized format\n", componentId.c_str());
                 }
-                USBSerial.printf("  Loaded multimedia config for '%s'\n", componentId.c_str());
+                // Then check for new format with buttonPress.report
+                else if (actionConfig.buttonPressAction.type == "multimedia" && !actionConfig.buttonPressAction.report.empty()) {
+                    // Parse consumer report from new format
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPressAction.report.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.buttonPressAction.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' using nested format\n", componentId.c_str());
+                }
+                // Then check legacy consumerReport field
+                else if (!actionConfig.consumerReport.empty()) {
+                    // Parse consumer report from legacy format
+                    for (size_t i = 0; i < std::min(actionConfig.consumerReport.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.consumerReport[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' using legacy consumerReport\n", componentId.c_str());
+                }
+                // Check buttonPress as fallback for compatibility
+                else if (!actionConfig.buttonPress.empty()) {
+                    // Parse consumer report from buttonPress field
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPress.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.buttonPress[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' from legacy buttonPress field\n", componentId.c_str());
+                }
             } else if (actionConfig.type == "macro") {
                 keyConfig.type = ACTION_MACRO;
                 keyConfig.macroId = actionConfig.macroId;
@@ -288,20 +344,82 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
             // Set action type based on the action config
             if (actionConfig.type == "hid") {
                 keyConfig.type = ACTION_HID;
-                // Parse HID report
-                for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)8); i++) {
-                    keyConfig.hidReport[i] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+                
+                // First check for direct report field (new standardized format)
+                if (!actionConfig.report.empty()) {
+                    // Parse HID report from standardized format
+                    for (size_t i = 0; i < std::min(actionConfig.report.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' in layer '%s' using standardized format\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
                 }
-                USBSerial.printf("  Loaded HID config for '%s' in layer '%s'\n", 
-                               actualComponentId.c_str(), layerName.c_str());
+                // Then check for new format with buttonPress.report
+                else if (actionConfig.buttonPressAction.type == "hid" && !actionConfig.buttonPressAction.report.empty()) {
+                    // Parse HID report from new format
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPressAction.report.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.buttonPressAction.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' in layer '%s' using nested format\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
+                // Then check legacy formats
+                else if (!actionConfig.hidReport.empty()) {
+                    // Parse HID report from legacy format
+                    for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' in layer '%s' using legacy format\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
+                // Check buttonPress as fallback for compatibility
+                else if (!actionConfig.buttonPress.empty()) {
+                    // Parse HID report from buttonPress field
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPress.size(), (size_t)8); i++) {
+                        keyConfig.hidReport[i] = strtoul(actionConfig.buttonPress[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded HID config for '%s' in layer '%s' from legacy buttonPress field\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
             } else if (actionConfig.type == "multimedia") {
                 keyConfig.type = ACTION_MULTIMEDIA;
-                // Parse consumer report
-                for (size_t i = 0; i < std::min(actionConfig.consumerReport.size(), (size_t)4); i++) {
-                    keyConfig.consumerReport[i] = strtoul(actionConfig.consumerReport[i].c_str(), nullptr, 16);
+                
+                // First check for direct report field (new standardized format)
+                if (!actionConfig.report.empty()) {
+                    // Parse consumer report from standardized format
+                    for (size_t i = 0; i < std::min(actionConfig.report.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s' using standardized format\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
                 }
-                USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s'\n", 
-                               actualComponentId.c_str(), layerName.c_str());
+                // Then check for new format with buttonPress.report
+                else if (actionConfig.buttonPressAction.type == "multimedia" && !actionConfig.buttonPressAction.report.empty()) {
+                    // Parse consumer report from new format
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPressAction.report.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.buttonPressAction.report[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s' using nested format\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
+                // Then check legacy consumerReport field
+                else if (!actionConfig.consumerReport.empty()) {
+                    // Parse consumer report from legacy format
+                    for (size_t i = 0; i < std::min(actionConfig.consumerReport.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.consumerReport[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s' using legacy consumerReport\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
+                // Check buttonPress as fallback for compatibility
+                else if (!actionConfig.buttonPress.empty()) {
+                    // Parse consumer report from buttonPress field
+                    for (size_t i = 0; i < std::min(actionConfig.buttonPress.size(), (size_t)4); i++) {
+                        keyConfig.consumerReport[i] = strtoul(actionConfig.buttonPress[i].c_str(), nullptr, 16);
+                    }
+                    USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s' from legacy buttonPress field\n", 
+                                   actualComponentId.c_str(), layerName.c_str());
+                }
             } else if (actionConfig.type == "macro") {
                 keyConfig.type = ACTION_MACRO;
                 keyConfig.macroId = actionConfig.macroId;

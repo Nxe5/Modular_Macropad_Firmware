@@ -30,6 +30,7 @@ struct EncoderActionConfig {
 struct ActionConfig {
     String id;
     String type;
+    std::vector<String> report;      // Standard report field for unified format
     std::vector<String> hidReport;
     std::vector<String> consumerReport;
     String macroId;

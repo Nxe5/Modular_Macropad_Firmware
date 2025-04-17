@@ -190,6 +190,15 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                             USBSerial.printf("Component %s has type: %s\n", 
                                          componentId.c_str(), actionConfig.type.c_str());
                             
+                            // Parse standard report field if it exists
+                            if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                JsonArray reportArray = config["report"].as<JsonArray>();
+                                for (JsonVariant code : reportArray) {
+                                    actionConfig.report.push_back(code.as<String>());
+                                }
+                                USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                            }
+                            
                             // Load encoder-specific fields
                             if (config.containsKey("clockwise")) {
                                 if (config["clockwise"].is<JsonArray>()) {
@@ -310,6 +319,15 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                                     actionConfig.type = config["type"].as<String>();
                                     USBSerial.printf("  Component %s has type: %s\n", 
                                                  componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    // Parse standard report field if it exists
+                                    if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                        JsonArray reportArray = config["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                                    }
                                     
                                     // Load encoder-specific fields
                                     if (config.containsKey("clockwise")) {
@@ -432,6 +450,15 @@ std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) 
                                     actionConfig.type = config["type"].as<String>();
                                     USBSerial.printf("  Component %s has type: %s\n", 
                                                  componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    // Parse standard report field if it exists
+                                    if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                        JsonArray reportArray = config["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                                    }
                                     
                                     // Load encoder-specific fields
                                     if (config.containsKey("clockwise")) {

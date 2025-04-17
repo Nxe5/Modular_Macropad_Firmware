@@ -32,7 +32,7 @@
     },
     "display": {
       "brightness": 80,
-      "orientation": 0,
+      "orientation": 1,
       "defaultContent": {
         "text": "Hello World!",
         "color": "0xFFFFFF",
