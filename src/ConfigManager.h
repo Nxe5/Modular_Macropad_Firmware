@@ -39,6 +39,14 @@ struct ActionConfig {
     std::vector<String> counterclockwise; // Legacy format for encoder support
     std::vector<String> buttonPress;    // Legacy format for encoder button
     
+    // Mouse action fields
+    String action;  // "click", "press", "release", "move", "scroll"
+    int button;     // 1=left, 2=right, 3=middle
+    int x;          // X movement
+    int y;          // Y movement
+    int wheel;      // Wheel movement
+    int clicks;     // Number of clicks
+    
     // New format for encoder actions with nested types
     EncoderActionConfig clockwiseAction;
     EncoderActionConfig counterclockwiseAction;

@@ -9,16 +9,25 @@
 #include <set>
 #include <algorithm>
 #include <ArduinoJson.h>
+#include <tusb.h>  // Use ESP32's built-in TinyUSB library instead of Adafruit's
 
 // HID Report Descriptors
-#define HID_KEYBOARD_REPORT_SIZE 8
-#define HID_CONSUMER_REPORT_SIZE 4
+#define HID_KEYBOARD_REPORT_SIZE 8  // 1 byte report ID + 1 byte modifier + 6 bytes keycodes
+#define HID_CONSUMER_REPORT_SIZE 3  // 1 byte report ID + 2 bytes usage code
+#define HID_MOUSE_REPORT_SIZE    5  // 1 byte report ID + 1 byte buttons + 1 byte x + 1 byte y + 1 byte wheel
 #define HID_MAX_KEYS 6  // Maximum keys in one report (excluding modifiers)
+
+// Report IDs
+#define REPORT_ID_KEYBOARD   1
+#define REPORT_ID_MOUSE      2
+#define REPORT_ID_CONSUMER   3
+#define REPORT_ID_SYSTEM     4
 
 // Report types
 enum HIDReportType {
     HID_REPORT_KEYBOARD,
     HID_REPORT_CONSUMER,
+    HID_REPORT_MOUSE,
     HID_REPORT_SYSTEM
 };
 
@@ -73,8 +82,17 @@ public:
     // Send HID reports
     bool sendKeyboardReport(const uint8_t* report, size_t length = HID_KEYBOARD_REPORT_SIZE);
     bool sendConsumerReport(const uint8_t* report, size_t length = HID_CONSUMER_REPORT_SIZE);
+    bool sendMouseReport(const uint8_t* report, size_t length = HID_MOUSE_REPORT_SIZE);
     bool sendEmptyKeyboardReport(); // Release all keys
     bool sendEmptyConsumerReport(); // Release all consumer controls
+    bool sendEmptyMouseReport(); // Release all mouse buttons
+
+    // Mouse movement helper methods
+    bool moveMouse(int8_t x, int8_t y);
+    bool scrollMouse(int8_t wheel);
+    bool clickMouse(uint8_t buttons);
+    bool pressMouseButton(uint8_t button);
+    bool releaseMouseButton(uint8_t button);
 
     // Update composite keyboard report from current key state
     bool updateKeyboardReportFromState();
@@ -109,9 +127,15 @@ private:
         uint8_t report[HID_CONSUMER_REPORT_SIZE] = {0};
     };
 
+    class MouseReportDescriptor {
+    public:
+        uint8_t report[HID_MOUSE_REPORT_SIZE] = {0};
+    };
+
     // Current report state
     KeyboardReportDescriptor keyboardState;
     ConsumerReportDescriptor consumerState;
+    MouseReportDescriptor mouseState;
 
     // Track pressed keys
     std::set<uint8_t> pressedKeys;

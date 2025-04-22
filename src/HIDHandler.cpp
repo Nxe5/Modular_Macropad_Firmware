@@ -67,12 +67,46 @@ extern USBCDC USBSerial;
 }
 #endif
 
+#ifndef TUD_HID_REPORT_DESC_MOUSE
+#define TUD_HID_REPORT_DESC_MOUSE() { \
+  0x05, 0x01,       /* Usage Page (Generic Desktop) */ \
+  0x09, 0x02,       /* Usage (Mouse) */ \
+  0xA1, 0x01,       /* Collection (Application) */ \
+  0x85, 0x02,       /*   Report ID (2) */ \
+  0x09, 0x01,       /*   Usage (Pointer) */ \
+  0xA1, 0x00,       /*   Collection (Physical) */ \
+  0x05, 0x09,       /*     Usage Page (Button) */ \
+  0x19, 0x01,       /*     Usage Minimum (1) */ \
+  0x29, 0x05,       /*     Usage Maximum (5) */ \
+  0x15, 0x00,       /*     Logical Minimum (0) */ \
+  0x25, 0x01,       /*     Logical Maximum (1) */ \
+  0x95, 0x05,       /*     Report Count (5) */ \
+  0x75, 0x01,       /*     Report Size (1) */ \
+  0x81, 0x02,       /*     Input (Data, Variable, Absolute) */ \
+  0x95, 0x01,       /*     Report Count (1) */ \
+  0x75, 0x03,       /*     Report Size (3) */ \
+  0x81, 0x03,       /*     Input (Constant) */ \
+  0x05, 0x01,       /*     Usage Page (Generic Desktop) */ \
+  0x09, 0x30,       /*     Usage (X) */ \
+  0x09, 0x31,       /*     Usage (Y) */ \
+  0x09, 0x38,       /*     Usage (Wheel) */ \
+  0x15, 0x81,       /*     Logical Minimum (-127) */ \
+  0x25, 0x7F,       /*     Logical Maximum (127) */ \
+  0x75, 0x08,       /*     Report Size (8) */ \
+  0x95, 0x03,       /*     Report Count (3) */ \
+  0x81, 0x06,       /*     Input (Data, Variable, Relative) */ \
+  0xC0,             /*   End Collection */ \
+  0xC0              /* End Collection */ \
+}
+#endif
+
 // Global HID handler instance
 HIDHandler* hidHandler = nullptr;
 
 HIDHandler::HIDHandler() {
     memset(&keyboardState, 0, sizeof(keyboardState));
     memset(&consumerState, 0, sizeof(consumerState));
+    mouseState.report[0] = 1; // Set report ID
 }
 
 HIDHandler::~HIDHandler() {
@@ -406,6 +440,9 @@ bool HIDHandler::processNextReport() {
         case HID_REPORT_CONSUMER:
             success = sendConsumerReport(report.data, report.length);
             break;
+        case HID_REPORT_MOUSE:
+            success = sendMouseReport(report.data, report.length);
+            break;
         default:
             USBSerial.println("Unknown report type");
             break;
@@ -496,4 +533,107 @@ void cleanupHIDHandler() {
         delete hidHandler;
         hidHandler = nullptr;
     }
+}
+
+bool HIDHandler::sendMouseReport(const uint8_t* report, size_t length) {
+    if (!report || length < 4) {
+        USBSerial.println("Invalid mouse report");
+        return false;
+    }
+
+    // Debug output with detailed report information
+    USBSerial.printf("Mouse report details:\n");
+    USBSerial.printf("  Buttons: 0x%02X (", report[0]);
+    if (report[0] & 0x01) USBSerial.print("LEFT ");
+    if (report[0] & 0x02) USBSerial.print("RIGHT ");
+    if (report[0] & 0x04) USBSerial.print("MIDDLE ");
+    if (report[0] & 0x08) USBSerial.print("BACK ");
+    if (report[0] & 0x10) USBSerial.print("FORWARD ");
+    USBSerial.printf(")\n");
+    USBSerial.printf("  X: %d\n", (int8_t)report[1]);
+    USBSerial.printf("  Y: %d\n", (int8_t)report[2]);
+    USBSerial.printf("  Wheel: %d\n", (int8_t)report[3]);
+    
+    // Check USB state
+    if (!tud_mounted()) {
+        USBSerial.println("USB not mounted");
+        return false;
+    }
+
+    if (!tud_hid_ready()) {
+        USBSerial.println("HID not ready");
+        return false;
+    }
+
+    // Send the report using the mouse-specific function
+    // report[0] = buttons (5 bits + 3 padding)
+    // report[1] = X movement
+    // report[2] = Y movement
+    // report[3] = Wheel movement
+    if (tud_hid_mouse_report(
+        REPORT_ID_MOUSE,  // Report ID for mouse
+        report[0],        // buttons
+        report[1],        // x
+        report[2],        // y
+        report[3],        // vertical wheel
+        0                 // horizontal wheel (not used)
+    )) {
+        USBSerial.println("Mouse report sent successfully");
+        return true;
+    } else {
+        USBSerial.println("Failed to send mouse report");
+        return false;
+    }
+}
+
+bool HIDHandler::sendEmptyMouseReport() {
+    uint8_t emptyReport[4] = {0}; // No need for report ID in the array
+    return sendMouseReport(emptyReport, 4);
+}
+
+bool HIDHandler::moveMouse(int8_t x, int8_t y) {
+    uint8_t report[4] = {
+        0,  // No buttons
+        x,  // X movement
+        y,  // Y movement
+        0   // No wheel
+    };
+    return sendMouseReport(report, 4);
+}
+
+bool HIDHandler::scrollMouse(int8_t wheel) {
+    uint8_t report[4] = {
+        0,      // No buttons
+        0,      // No X movement
+        0,      // No Y movement
+        wheel   // Wheel movement
+    };
+    return sendMouseReport(report, 4);
+}
+
+bool HIDHandler::clickMouse(uint8_t buttons) {
+    uint8_t report[4] = {
+        buttons,    // Button state
+        0,          // No X movement
+        0,          // No Y movement
+        0           // No wheel
+    };
+    bool success = sendMouseReport(report, 4);
+    if (success) {
+        report[0] = 0; // Release buttons
+        success = sendMouseReport(report, 4);
+    }
+    return success;
+}
+
+bool HIDHandler::pressMouseButton(uint8_t button) {
+    mouseState.report[0] = 2; // Report ID 2
+    mouseState.report[1] |= button;
+    return sendMouseReport(mouseState.report + 1, HID_MOUSE_REPORT_SIZE - 1);
+}
+
+bool HIDHandler::releaseMouseButton(uint8_t button) {
+    mouseState.report[0] = 2; // Report ID 2
+    mouseState.report[1] &= ~button;
+    return sendMouseReport(mouseState.report + 1, HID_MOUSE_REPORT_SIZE - 1);
 }

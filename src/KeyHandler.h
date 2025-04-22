@@ -22,7 +22,8 @@ enum ActionType {
     ACTION_MULTIMEDIA = 2,
     ACTION_MACRO = 3,
     ACTION_LAYER = 4,
-    ACTION_CYCLE_LAYER = 5
+    ACTION_CYCLE_LAYER = 5,
+    ACTION_MOUSE = 6  // Add mouse action type
 };
 
 enum KeyAction {
@@ -35,6 +36,7 @@ struct KeyConfig {
     ActionType type = ACTION_NONE;
     uint8_t hidReport[8] = {0};
     uint8_t consumerReport[4] = {0};
+    uint8_t mouseReport[5] = {0};  // 1 byte report ID + 4 bytes data
     String macroId = "";
     String targetLayer = "";
 };
@@ -54,6 +56,7 @@ public:
     // Add diagnostic methods
     void printKeyboardState();
     void diagnostics();
+    void printKeyConfig(uint8_t keyIndex);
     
     // Layer management
     bool switchToLayer(const String& layerName);
@@ -122,6 +125,9 @@ private:
     unsigned long* lastDebounceTime;
     KeyAction* lastAction;
     const unsigned long debounceDelay = 50;
+    
+    // Helper method to configure mouse actions
+    void configureMouseAction(const ActionConfig& actionConfig, KeyConfig& keyConfig, const String& componentId, const String& layerName = "");
 };
 
 extern KeyHandler* keyHandler;

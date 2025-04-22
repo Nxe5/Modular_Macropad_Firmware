@@ -823,6 +823,10 @@ void setup() {
     // Initialize HID components
     ConsumerControl.begin();
     USBSerial.println("HID Consumer Control initialized");
+    Mouse.begin();
+    USBSerial.println("HID Mouse initialized");
+    Keyboard.begin();
+    USBSerial.println("HID Keyboard initialized");
     
     // Initialize LittleFS with improved approach
     USBSerial.println("Initializing filesystem...");
@@ -924,6 +928,9 @@ void loop() {
     
     // Update macro execution
     updateMacroHandler();
+
+    // Update HID handler
+    updateHIDHandler();
 
     // Run LittleFS diagnostics if enabled
     if (diagnosticsEnabled) {

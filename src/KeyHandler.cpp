@@ -163,6 +163,99 @@ uint8_t KeyHandler::getTotalKeys() {
     return componentPositions.size();
 }
 
+void KeyHandler::configureMouseAction(const ActionConfig& actionConfig, KeyConfig& keyConfig, const String& componentId, const String& layerName) {
+    keyConfig.type = ACTION_MOUSE;
+    
+    // Initialize the report with the report ID
+    keyConfig.mouseReport[0] = 1; // Report ID 1
+    
+    // First check for direct report field (new standardized format)
+    if (!actionConfig.report.empty()) {
+        // Parse mouse report from standardized format
+        // Skip the first byte (report ID) and copy up to 4 bytes of data
+        for (size_t i = 0; i < std::min(actionConfig.report.size(), (size_t)4); i++) {
+            keyConfig.mouseReport[i + 1] = strtoul(actionConfig.report[i].c_str(), nullptr, 16);
+        }
+        USBSerial.printf("  Loaded mouse config for '%s'%s using standardized format\n", 
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str());
+    }
+    // Then check for new format with buttonPress.report
+    else if (actionConfig.buttonPressAction.type == "mouse" && !actionConfig.buttonPressAction.report.empty()) {
+        // Parse mouse report from new format
+        // Skip the first byte (report ID) and copy up to 4 bytes of data
+        for (size_t i = 0; i < std::min(actionConfig.buttonPressAction.report.size(), (size_t)4); i++) {
+            keyConfig.mouseReport[i + 1] = strtoul(actionConfig.buttonPressAction.report[i].c_str(), nullptr, 16);
+        }
+        USBSerial.printf("  Loaded mouse config for '%s'%s using nested format\n", 
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str());
+    }
+    // Then check for action and button fields
+    else if (actionConfig.action == "click" || actionConfig.action == "press") {
+        // Set up mouse report based on action and button
+        uint8_t button = 0;
+        if (actionConfig.button == 1) button = 1;  // Left button
+        else if (actionConfig.button == 2) button = 2;  // Right button
+        else if (actionConfig.button == 3) button = 4;  // Middle button
+        
+        keyConfig.mouseReport[1] = button;  // Button state
+        keyConfig.mouseReport[2] = 0;  // X movement
+        keyConfig.mouseReport[3] = 0;  // Y movement
+        keyConfig.mouseReport[4] = 0;  // Wheel
+        
+        USBSerial.printf("  Loaded mouse config for '%s'%s using action/button format: action=%s, button=%d\n", 
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str(),
+                        actionConfig.action.c_str(), actionConfig.button);
+    }
+    // Add support for mouse movement
+    else if (actionConfig.action == "move") {
+        keyConfig.mouseReport[1] = 0;  // No buttons pressed
+        
+        // Handle X movement
+        if (actionConfig.action == "move-right") {
+            keyConfig.mouseReport[2] = 10;  // Move right
+        } else if (actionConfig.action == "move-left") {
+            keyConfig.mouseReport[2] = -10;  // Move left
+        } else {
+            keyConfig.mouseReport[2] = 0;
+        }
+        
+        // Handle Y movement
+        if (actionConfig.action == "move-down") {
+            keyConfig.mouseReport[3] = 10;  // Move down
+        } else if (actionConfig.action == "move-up") {
+            keyConfig.mouseReport[3] = -10;  // Move up
+        } else {
+            keyConfig.mouseReport[3] = 0;
+        }
+        
+        keyConfig.mouseReport[4] = 0;  // No wheel movement
+        
+        USBSerial.printf("  Loaded mouse movement config for '%s'%s: action=%s\n",
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str(),
+                        actionConfig.action.c_str());
+    }
+    // Then check legacy formats
+    else if (!actionConfig.hidReport.empty()) {
+        // Parse mouse report from legacy format
+        // Skip the first byte (report ID) and copy up to 4 bytes of data
+        for (size_t i = 0; i < std::min(actionConfig.hidReport.size(), (size_t)4); i++) {
+            keyConfig.mouseReport[i + 1] = strtoul(actionConfig.hidReport[i].c_str(), nullptr, 16);
+        }
+        USBSerial.printf("  Loaded mouse config for '%s'%s using legacy hidReport format\n", 
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str());
+    }
+    // Check buttonPress as fallback for compatibility
+    else if (!actionConfig.buttonPress.empty()) {
+        // Parse mouse report from buttonPress field
+        // Skip the first byte (report ID) and copy up to 4 bytes of data
+        for (size_t i = 0; i < std::min(actionConfig.buttonPress.size(), (size_t)4); i++) {
+            keyConfig.mouseReport[i + 1] = strtoul(actionConfig.buttonPress[i].c_str(), nullptr, 16);
+        }
+        USBSerial.printf("  Loaded mouse config for '%s'%s from legacy buttonPress field\n", 
+                        componentId.c_str(), layerName.isEmpty() ? "" : (" in layer '" + layerName + "'").c_str());
+    }
+}
+
 void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& actions) {
     uint8_t totalKeys = componentPositions.size();
     
@@ -290,6 +383,8 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
                     }
                     USBSerial.printf("  Loaded multimedia config for '%s' from legacy buttonPress field\n", componentId.c_str());
                 }
+            } else if (actionConfig.type == "mouse") {
+                configureMouseAction(actionConfig, keyConfig, componentId, "");
             } else if (actionConfig.type == "macro") {
                 keyConfig.type = ACTION_MACRO;
                 keyConfig.macroId = actionConfig.macroId;
@@ -420,6 +515,8 @@ void KeyHandler::loadKeyConfiguration(const std::map<String, ActionConfig>& acti
                     USBSerial.printf("  Loaded multimedia config for '%s' in layer '%s' from legacy buttonPress field\n", 
                                    actualComponentId.c_str(), layerName.c_str());
                 }
+            } else if (actionConfig.type == "mouse") {
+                configureMouseAction(actionConfig, keyConfig, actualComponentId, layerName);
             } else if (actionConfig.type == "macro") {
                 keyConfig.type = ACTION_MACRO;
                 keyConfig.macroId = actionConfig.macroId;
@@ -702,7 +799,7 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
         case ACTION_MULTIMEDIA:
             // Send consumer report
             if (action == KEY_PRESS) {
-                USBSerial.print("Multimedia Report: ");
+                USBSerial.print("Consumer Report: ");
                 for (int i = 0; i < 4; i++) {
                     USBSerial.printf("%02X ", config.consumerReport[i]);
                 }
@@ -715,6 +812,53 @@ void KeyHandler::executeAction(uint8_t keyIndex, KeyAction action) {
             } else if (action == KEY_RELEASE) {
                 if (hidHandler) {
                     hidHandler->sendEmptyConsumerReport();
+                }
+            }
+            break;
+            
+        case ACTION_MOUSE:
+            if (action == KEY_PRESS) {
+                // Format mouse report according to HID descriptor:
+                // - Report ID (1 byte)
+                // - 5 buttons (1 bit each)
+                // - 3 padding bits
+                // - X, Y, Wheel (8 bits each, signed)
+                uint8_t mouseReport[HID_MOUSE_REPORT_SIZE] = {1}; // Report ID 1
+                
+                // Set button state (using first 5 bits)
+                if (config.mouseReport[1] == 1) {
+                    mouseReport[1] = 0x01;  // Left button
+                } else if (config.mouseReport[1] == 2) {
+                    mouseReport[1] = 0x02;  // Right button
+                } else if (config.mouseReport[1] == 4) {
+                    mouseReport[1] = 0x04;  // Middle button
+                } else {
+                    mouseReport[1] = config.mouseReport[1];  // Use the value directly if not a standard button
+                }
+                
+                // Copy movement and wheel values
+                mouseReport[2] = config.mouseReport[2];  // X
+                mouseReport[3] = config.mouseReport[3];  // Y
+                mouseReport[4] = config.mouseReport[4];  // Wheel
+                
+                USBSerial.print("Mouse Report: ");
+                for (int i = 0; i < HID_MOUSE_REPORT_SIZE; i++) {
+                    USBSerial.printf("%02X ", mouseReport[i]);
+                }
+                USBSerial.println();
+                
+                if (hidHandler) {
+                    bool sent = hidHandler->sendMouseReport(mouseReport, HID_MOUSE_REPORT_SIZE);
+                    USBSerial.printf("Mouse report sent: %s\n", sent ? "SUCCESS" : "FAILED");
+                    
+                    // Add a small delay for click detection
+                    if (sent && mouseReport[1] != 0) {  // Only delay if a button was pressed
+                        delay(50);  // 50ms delay
+                    }
+                }
+            } else if (action == KEY_RELEASE) {
+                if (hidHandler) {
+                    hidHandler->sendEmptyMouseReport();
                 }
             }
             break;
@@ -983,6 +1127,16 @@ void KeyHandler::displayKeyConfig(const KeyConfig& config) {
             USBSerial.println("]");
             break;
             
+        case ACTION_MOUSE:
+            USBSerial.println("Mouse");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 4; i++) {
+                USBSerial.printf("0x%02X", config.mouseReport[i]);
+                if (i < 3) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
         default:
             USBSerial.println("Unknown");
             break;
@@ -1050,4 +1204,67 @@ String KeyHandler::getNextLayerName() const {
                  currentIndex, nextIndex);
     
     return layers[nextIndex];
+}
+
+void KeyHandler::printKeyConfig(uint8_t keyIndex) {
+    if (keyIndex >= componentPositions.size() || !actionMap) {
+        USBSerial.printf("Error: Invalid key index %d\n", keyIndex);
+        return;
+    }
+
+    const KeyConfig& config = actionMap[keyIndex];
+    String componentId = componentPositions[keyIndex].id;
+    
+    USBSerial.printf("Key %s Configuration:\n", componentId.c_str());
+    USBSerial.print("  Type: ");
+    
+    switch (config.type) {
+        case ACTION_HID:
+            USBSerial.println("HID");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 8; i++) {
+                USBSerial.printf("0x%02X", config.hidReport[i]);
+                if (i < 7) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
+        case ACTION_MULTIMEDIA:
+            USBSerial.println("Multimedia");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 4; i++) {
+                USBSerial.printf("0x%02X", config.consumerReport[i]);
+                if (i < 3) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
+        case ACTION_MOUSE:
+            USBSerial.println("Mouse");
+            USBSerial.print("  Report: [");
+            for (int i = 0; i < 4; i++) {
+                USBSerial.printf("0x%02X", config.mouseReport[i]);
+                if (i < 3) USBSerial.print(", ");
+            }
+            USBSerial.println("]");
+            break;
+            
+        case ACTION_MACRO:
+            USBSerial.println("Macro");
+            USBSerial.printf("  Macro ID: %s\n", config.macroId.c_str());
+            break;
+            
+        case ACTION_LAYER:
+            USBSerial.println("Layer");
+            USBSerial.printf("  Target Layer: %s\n", config.targetLayer.c_str());
+            break;
+            
+        case ACTION_CYCLE_LAYER:
+            USBSerial.println("Cycle Layer");
+            break;
+            
+        default:
+            USBSerial.println("Unknown");
+            break;
+    }
 }

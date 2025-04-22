@@ -53,8 +53,8 @@
             "report": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
           },
           "button-13": {
-            "type": "hid",
-            "report": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]
+            "type": "mouse",
+            "report": ["0x01", "0x64", "0x00", "0x00"]
           },
           "button-14": {
             "type": "hid",
@@ -73,8 +73,8 @@
             "report": ["0x00", "0x00", "0xE9", "0x00"]
           },
           "button-18": {
-            "type": "hid",
-            "report": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+            "type": "mouse",
+            "report": ["0x01", "0x00", "0x00", "0x00"]
           },
           "encoder-1": {
             "type": "encoder",
@@ -145,8 +145,8 @@
             "report": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
           },
           "button-13": {
-            "type": "hid",
-            "report": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]
+            "type": "mouse",
+            "report": ["0x01", "0x64", "0x00", "0x00"]
           },
           "button-14": {
             "type": "hid",
@@ -165,8 +165,8 @@
             "report": ["0x00", "0x00", "0xE9", "0x00"]
           },
           "button-18": {
-            "type": "hid",
-            "report": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+            "type": "mouse",
+            "report": ["0x01", "0x00", "0x00", "0x00"]
           },
           "encoder-1": {
             "type": "encoder",
