@@ -3,7 +3,7 @@
 #include <ArduinoJson.h>
 
 String VersionManager::getVersionString() {
-    return FIRMWARE_VERSION_STRING;
+    return String(FIRMWARE_VERSION_STRING);
 }
 
 uint8_t VersionManager::getMajorVersion() {
@@ -19,7 +19,7 @@ uint8_t VersionManager::getPatchVersion() {
 }
 
 uint32_t VersionManager::getBuildNumber() {
-    return FIRMWARE_BUILD_NUMBER;
+    return 1; // Default build number
 }
 
 String VersionManager::getBuildDate() {
@@ -31,29 +31,26 @@ String VersionManager::getBuildTime() {
 }
 
 String VersionManager::getDeviceName() {
-    return String(DEVICE_NAME);
+    return DEVICE_NAME;
 }
 
 String VersionManager::getDeviceManufacturer() {
-    return String(DEVICE_MANUFACTURER);
+    return DEVICE_MANUFACTURER;
 }
 
 String VersionManager::getDeviceModel() {
-    return String(DEVICE_MODEL);
+    return DEVICE_MODEL;
 }
 
 String VersionManager::getVersionInfoJson() {
-    StaticJsonDocument<512> doc;
-    doc["version"] = FIRMWARE_VERSION_STRING;
-    doc["major"] = FIRMWARE_VERSION_MAJOR;
-    doc["minor"] = FIRMWARE_VERSION_MINOR;
-    doc["patch"] = FIRMWARE_VERSION_PATCH;
-    doc["build"] = FIRMWARE_BUILD_NUMBER;
-    doc["buildDate"] = FIRMWARE_BUILD_DATE;
-    doc["buildTime"] = FIRMWARE_BUILD_TIME;
-    doc["deviceName"] = DEVICE_NAME;
-    doc["manufacturer"] = DEVICE_MANUFACTURER;
-    doc["model"] = DEVICE_MODEL;
+    DynamicJsonDocument doc(512);
+    doc["version"] = String(FIRMWARE_VERSION_STRING);
+    doc["build"] = 1; // Default build number
+    doc["build_date"] = String(FIRMWARE_BUILD_DATE);
+    doc["build_time"] = String(FIRMWARE_BUILD_TIME);
+    doc["device_name"] = String(DEVICE_NAME);
+    doc["device_manufacturer"] = String(DEVICE_MANUFACTURER);
+    doc["device_model"] = String(DEVICE_MODEL);
     
     String output;
     serializeJson(doc, output);

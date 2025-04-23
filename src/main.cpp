@@ -48,6 +48,8 @@ extern "C" {
 
 #include "VersionManager.h"
 
+#include "OTAUpdateManager.h"
+
 // Forward declarations
 void createWorkingActionsFile();
 
@@ -926,6 +928,9 @@ void setup() {
     xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
 
+    // Initialize OTA Update Manager
+    OTAUpdateManager::begin();
+
     USBSerial.println("Setup complete - entering main loop");
 }
 
@@ -948,6 +953,15 @@ void loop() {
     // Run LittleFS diagnostics if enabled
     if (diagnosticsEnabled) {
         runDiagnostics();
+    }
+
+    // Check for updates every hour
+    static unsigned long lastUpdateCheck = 0;
+    if (millis() - lastUpdateCheck > 3600000) { // 1 hour
+        lastUpdateCheck = millis();
+        if (WiFiManager::isConnected()) {
+            OTAUpdateManager::checkForUpdates();
+        }
     }
 
     // Minimal loop - print a heartbeat every 10 seconds

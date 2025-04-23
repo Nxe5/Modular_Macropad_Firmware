@@ -1,0 +1,54 @@
+name: Create Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'platformio.ini'
+      - 'data/**'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install PlatformIO
+        run: |
+          pip install platformio
+          pio upgrade
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(grep -oP 'version = "\K[^"]+' platformio.ini)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release v${{ steps.get_version.outputs.version }}
+          tag_name: v${{ steps.get_version.outputs.version }}
+          body: |
+            ## Changes
+            ${{ github.event.head_commit.message }}
+
+            ## Firmware
+            Built from commit: ${{ github.sha }}
+          files: |
+            .pio/build/esp32dev/firmware.bin
+          draft: false
+          prerelease: false
+          generate_release_notes: true 
