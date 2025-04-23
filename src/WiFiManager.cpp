@@ -131,6 +131,14 @@ void WiFiManager::setupWebSocket() {
 }
 
 void WiFiManager::setupWebServer() {
+    // Serve static files from LittleFS
+    _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
+    
+    // Handle file not found
+    _server.onNotFound([](AsyncWebServerRequest *request) {
+        request->send(404, "text/plain", "File not found");
+    });
+    
     // Config web server
     _server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(LittleFS, "/web/favicon.ico", "image/x-icon");
@@ -170,9 +178,6 @@ void WiFiManager::setupWebServer() {
         request->send(404, "text/plain", "Not found");
     });
     
-    // Serve static files from LittleFS
-    _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
-    
     // Serve CSS file
     _server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(LittleFS, "/web/style.css", "text/css");
@@ -197,9 +202,9 @@ void WiFiManager::setupWebServer() {
             String fullPath = "/web/" + path;
             USBSerial.printf("Full path: %s\n", fullPath.c_str());
             
-            if (SPIFFS.exists(fullPath)) {
+            if (LittleFS.exists(fullPath)) {
                 USBSerial.printf("File found, serving with proper MIME type\n");
-                request->send(SPIFFS, fullPath, "application/javascript");
+                request->send(LittleFS, fullPath, "application/javascript");
                 return;
             } else {
                 USBSerial.printf("File not found: %s\n", fullPath.c_str());
@@ -220,9 +225,9 @@ void WiFiManager::setupWebServer() {
             String fullPath = "/web/" + path;
             USBSerial.printf("Full path: %s\n", fullPath.c_str());
             
-            if (SPIFFS.exists(fullPath)) {
+            if (LittleFS.exists(fullPath)) {
                 USBSerial.printf("File found, serving with proper MIME type\n");
-                request->send(SPIFFS, fullPath, "text/css");
+                request->send(LittleFS, fullPath, "text/css");
                 return;
             } else {
                 USBSerial.printf("File not found: %s\n", fullPath.c_str());
@@ -232,7 +237,7 @@ void WiFiManager::setupWebServer() {
         }
         
         // Let the default handler take care of other file types
-        request->next();
+        request->send(200, "text/plain", "File not found");
     });
     
     // API endpoints
@@ -2389,5 +2394,36 @@ String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) 
     }
     
     return "Custom";
+}
+
+// Update file serving routes
+void WiFiManager::setupFileRoutes() {
+    // JavaScript files
+    _server.on("^\\/web\\/.*\\.js$", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String fullPath = request->url();
+        USBSerial.printf("Full path: %s\n", fullPath.c_str());
+        
+        if (LittleFS.exists(fullPath)) {
+            USBSerial.printf("File found, serving with proper MIME type\n");
+            request->send(LittleFS, fullPath, "application/javascript");
+            return;
+        }
+        request->send(404, "text/plain", "File not found");
+    });
+    
+    // CSS files
+    _server.on("^\\/web\\/.*\\.css$", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String fullPath = request->url();
+        USBSerial.printf("Full path: %s\n", fullPath.c_str());
+        
+        if (LittleFS.exists(fullPath)) {
+            USBSerial.printf("File found, serving with proper MIME type\n");
+            request->send(LittleFS, fullPath, "text/css");
+            return;
+        }
+        request->send(404, "text/plain", "File not found");
+    });
+    
+    // ... existing code ...
 }
 

@@ -60,6 +60,9 @@ private:
     // Constants
     static const uint32_t STATUS_BROADCAST_INTERVAL;
     static const uint32_t CONNECT_TIMEOUT;
+    
+    // File serving methods
+    static void setupFileRoutes();
 };
 
 #endif // WIFI_MANAGER_H 
