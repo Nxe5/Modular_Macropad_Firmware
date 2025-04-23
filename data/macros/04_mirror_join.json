@@ -1,0 +1,75 @@
+{
+  "id": "04_mirror_join",
+  "name": "Mirror Join",
+  "description": "Automates the process of setting up mirroring and joining geometry. This macro adds a mirror modifier along the X-axis and joins the mirrored geometry with the original, creating a symmetrical model. Essential for creating symmetrical objects like characters, vehicles, or architectural elements. The joined geometry ensures proper topology and makes further editing easier. Perfect for maintaining symmetry while modeling.",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "m"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "x"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "j"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 

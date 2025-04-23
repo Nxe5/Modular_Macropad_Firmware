@@ -1,0 +1,19 @@
+{
+  "id": "test_macro",
+  "name": "Test Macro",
+  "description": "A test macro to check if macros are being loaded correctly",
+  "commands": [
+    {
+      "type": "type_text",
+      "text": "Test"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "type_text",
+      "text": " Macro"
+    }
+  ]
+} 

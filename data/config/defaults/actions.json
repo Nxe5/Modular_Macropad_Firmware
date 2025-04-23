@@ -1,0 +1,190 @@
+{
+  "actions": {
+    "layers": [
+      {
+        "layer-name": "default-actions-layer",
+        "active": true,
+        "layer-config": {
+          "button-1": {
+            "type": "cycle-layer"
+          },
+          "button-2": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x4C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-3": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-4": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x2B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-5": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x14", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-6": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1A", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-7": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-8": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x15", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-9": {
+            "type": "hid",
+            "report": ["0x02", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-10": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-11": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x16", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-12": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-13": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-14": {
+            "type": "hid",
+            "report": ["0x01", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-15": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1D", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-16": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-17": {
+            "type": "multimedia",
+            "report": ["0x00", "0x00", "0xE9", "0x00"]
+          },
+          "button-18": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "encoder-1": {
+            "type": "encoder",
+            "clockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xE9", "0x00"]
+            },
+            "counterclockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xEA", "0x00"]
+            },
+            "buttonPress": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xE2", "0x00"]
+            }
+          }
+        }
+      },
+      {
+        "layer-name": "layer-two",
+        "active": false,
+        "layer-config": {
+          "button-1": {
+            "type": "cycle-layer"
+          },
+          "button-2": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x4C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-3": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-4": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x2B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-5": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x14", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-6": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1A", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-7": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-8": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x15", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-9": {
+            "type": "hid",
+            "report": ["0x02", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-10": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-11": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x16", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-12": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-13": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-14": {
+            "type": "hid",
+            "report": ["0x01", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-15": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1D", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-16": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x1B", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "button-17": {
+            "type": "multimedia",
+            "report": ["0x00", "0x00", "0xE9", "0x00"]
+          },
+          "button-18": {
+            "type": "hid",
+            "report": ["0x00", "0x00", "0x2C", "0x00", "0x00", "0x00", "0x00", "0x00"]
+          },
+          "encoder-1": {
+            "type": "encoder",
+            "clockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xB6", "0x00"]
+            },
+            "counterclockwise": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xB5", "0x00"]
+            },
+            "buttonPress": {
+              "type": "multimedia",
+              "report": ["0x00", "0x00", "0xCD", "0x00"]
+            }
+          }
+        }
+      }
+    ]
+  }
+}

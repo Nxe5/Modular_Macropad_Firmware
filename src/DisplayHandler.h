@@ -5,7 +5,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include <SPI.h>
-#include "EncoderHandler.h" // Include this for EncoderType and EncoderConfig
+#include <ArduinoJson.h>
+#include "ConfigManager.h" // Include this for DisplayElement and DisplayMode structs
+#include <JPEGDEC.h>  // Include JPEGDEC for function parameter types
 
 // Pin definitions for the display
 #define TFT_CS    37   // Chip select pin
@@ -14,14 +16,37 @@
 #define TFT_MOSI  38   // Master out, slave in pin also known as DIN
 #define TFT_RST   41   // Reset pin
 
+// Display configuration constants
+#define DISPLAY_CONFIG_PATH "/config/display.json"
+#define DISPLAY_UPDATE_INTERVAL 1000 // Default update interval in ms
+
+// Display element types
+enum DisplayElementType {
+    ELEMENT_TEXT,
+    ELEMENT_LINE,
+    ELEMENT_RECT,
+    ELEMENT_CIRCLE
+};
+
+// JPEG decoder callback
+int jpegDrawCallback(JPEGDRAW *pDraw);
 
 // Function declarations
 void initializeDisplay();
 Adafruit_ST7789* getDisplay();
 void printText(const char* text, int x, int y, uint16_t color, uint8_t size);
+void drawTestPattern();
 void updateDisplay();
-void toggleMode();
+void loadDisplayConfig();
+void activateDisplayMode(const String& modeName);
 void handleEncoder(int encoderPosition);
+void displayMainLayout();  // New function for main layout
+
+// Background image functions
+void loadBackgroundImage();
+void displayBackgroundImage();
+bool loadBackgroundImageFromFile(const String& imagePath);
+void createGradientBackground();
 
 // Function to show a temporary message on the display
 void showTemporaryMessage(const char* message, uint32_t duration = 3000);
@@ -30,6 +55,8 @@ void checkTemporaryMessage(); // Check if temporary message should be cleared
 // Function to display WiFi information
 void displayWiFiInfo(bool isAPMode, const String& ipAddress, const String& ssid);
 
-// NOTE: EncoderType and EncoderConfig are now included from EncoderHandler.h
+// Getters for display state
+String getCurrentMode();
+bool isTemporaryMessageActive();
 
 #endif // DISPLAY_HANDLER_H

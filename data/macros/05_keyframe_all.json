@@ -1,0 +1,51 @@
+{
+  "id": "05_keyframe_all",
+  "name": "Keyframe All Properties",
+  "description": "Quickly creates keyframes for all animated properties of selected objects. This macro is a time-saver for animators, automatically setting keyframes for position, rotation, scale, and other animated properties. Essential for character animation, mechanical animations, or any complex motion where multiple properties need to be keyframed simultaneously. Helps maintain consistent animation timing and reduces the chance of missing important keyframes.",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "a"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "type_text",
+      "text": "i"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 

@@ -1,16 +1,19 @@
 #include "WiFiManager.h"
-#include "LEDHandler.h"
+#include "JsonConverters.h"  // Include our custom JSON converters
+#include "ConfigManager.h"
 #include "KeyHandler.h"
-#include "DisplayHandler.h"
+#include "HIDHandler.h"
 #include "MacroHandler.h"
+#include "LEDHandler.h"
+#include "DisplayHandler.h"
 #include <ESPAsyncWebServer.h>
 #include <AsyncTCP.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
-#include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ESPmDNS.h>
 #include "config.h"
+#include <USBCDC.h>
 
 // Forward declarations
 String serializedJson(const String& jsonStr);
@@ -24,6 +27,7 @@ extern MacroHandler* macroHandler;
 String WiFiManager::_ssid = "MacroPad";
 String WiFiManager::_password = "macropad123";
 bool WiFiManager::_apMode = true;
+String WiFiManager::_apName = "MacroPad_AP";
 AsyncWebServer WiFiManager::_server(80);
 AsyncWebSocket WiFiManager::_ws("/ws");
 bool WiFiManager::_isConnected = false;
@@ -35,7 +39,7 @@ const uint32_t WiFiManager::STATUS_BROADCAST_INTERVAL = 5000; // Increased from 
 const uint32_t WiFiManager::CONNECT_TIMEOUT = 30000; // 30 seconds
 
 void WiFiManager::begin() {
-    // Load WiFi config from SPIFFS
+    // Load WiFi config from LittleFS
     loadWiFiConfig();
     
     // Setup WiFi
@@ -51,9 +55,11 @@ void WiFiManager::begin() {
 }
 
 void WiFiManager::setupWiFi() {
+    // Always start AP first to ensure we have access in case STA connection fails
+    USBSerial.println("Setting up WiFi AP...");
+    
     if (_apMode) {
-        // Setup AP mode
-        USBSerial.println("Setting up WiFi in AP mode");
+        // AP-only mode
         WiFi.mode(WIFI_AP);
         WiFi.softAP(_ssid.c_str(), _password.c_str());
         
@@ -62,14 +68,25 @@ void WiFiManager::setupWiFi() {
         USBSerial.println(IP.toString());
         _isConnected = true;
         
-        // Show on display
-        showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
+        // Remove display message to prevent screen refresh
+        // showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
     } else {
-        // Setup STA mode
-        USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
-        showTemporaryMessage(("Connecting to WiFi: " + _ssid).c_str(), 3000);
+        // Dual mode - both AP and STA
+        // This allows for connecting to a WiFi network while still providing an AP for configuration
+        WiFi.mode(WIFI_AP_STA);
         
-        WiFi.mode(WIFI_STA);
+        // Set up AP with configured name or default
+        if (_apName.isEmpty()) {
+            _apName = "MacroPad_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+        }
+        WiFi.softAP(_apName.c_str(), "macropad123");
+        
+        IPAddress apIP = WiFi.softAPIP();
+        USBSerial.print("AP IP address: ");
+        USBSerial.println(apIP.toString());
+        
+        // Now connect to the configured WiFi network
+        USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
         WiFi.begin(_ssid.c_str(), _password.c_str());
         
         _connectAttemptStart = millis();
@@ -90,8 +107,8 @@ void WiFiManager::setupWiFi() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Show on display
-            showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
             
             // Broadcast connection status
             broadcastStatus();
@@ -99,8 +116,8 @@ void WiFiManager::setupWiFi() {
             USBSerial.println("Failed to connect in the initial attempt. Will retry in the background.");
             _isConnected = false;
             
-            // Show on display
-            showTemporaryMessage("WiFi connection failed.\nRetrying in background...", 3000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage("WiFi connection failed.\nRetrying in background...", 3000);
         }
     }
 }
@@ -114,16 +131,55 @@ void WiFiManager::setupWebSocket() {
 }
 
 void WiFiManager::setupWebServer() {
-    // Serve static files from SPIFFS
-    _server.serveStatic("/", SPIFFS, "/web/").setDefaultFile("index.html");
+    // Config web server
+    _server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(LittleFS, "/web/favicon.ico", "image/x-icon");
+    });
+    
+    // Add a request logger for debugging
+    _server.onNotFound([](AsyncWebServerRequest *request) {
+        USBSerial.print("DEBUG - Request to: ");
+        USBSerial.print(request->url());
+        USBSerial.print(" (Method: ");
+        
+        switch (request->method()) {
+            case HTTP_GET: USBSerial.print("GET"); break;
+            case HTTP_POST: USBSerial.print("POST"); break;
+            case HTTP_DELETE: USBSerial.print("DELETE"); break;
+            case HTTP_PUT: USBSerial.print("PUT"); break;
+            case HTTP_PATCH: USBSerial.print("PATCH"); break;
+            case HTTP_HEAD: USBSerial.print("HEAD"); break;
+            case HTTP_OPTIONS: USBSerial.print("OPTIONS"); break;
+            default: USBSerial.print("UNKNOWN"); break;
+        }
+        
+        USBSerial.print(", Client IP: ");
+        USBSerial.print(request->client()->remoteIP().toString());
+        USBSerial.println(")");
+        
+        // Log any parameters
+        if (request->params() > 0) {
+            USBSerial.println("Request Parameters:");
+            for (int i = 0; i < request->params(); i++) {
+                const AsyncWebParameter* p = request->getParam(i);
+                USBSerial.printf("  %s: %s\n", p->name().c_str(), p->value().c_str());
+            }
+        }
+        
+        // Send 404 response
+        request->send(404, "text/plain", "Not found");
+    });
+    
+    // Serve static files from LittleFS
+    _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
     
     // Serve CSS file
     _server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/web/style.css", "text/css");
+        request->send(LittleFS, "/web/style.css", "text/css");
     });
     
     // Serve assets files
-    _server.serveStatic("/assets/", SPIFFS, "/web/assets/");
+    _server.serveStatic("/assets/", LittleFS, "/web/assets/");
     
     // Add a catch-all handler for JavaScript files to ensure proper MIME type
     _server.on("/*", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -211,6 +267,10 @@ void WiFiManager::setupWebServer() {
         doc["ssid"] = WiFiManager::_ssid;
         doc["password"] = ""; // Don't send the password for security
         doc["ap_mode"] = WiFiManager::_apMode;
+        doc["ap_name"] = WiFiManager::_apName;
+        doc["sta_connected"] = WiFi.status() == WL_CONNECTED;
+        doc["sta_ip"] = WiFi.localIP().toString();
+        doc["ap_ip"] = WiFi.softAPIP().toString();
         
         String output;
         serializeJson(doc, output);
@@ -240,6 +300,13 @@ void WiFiManager::setupWebServer() {
                     WiFiManager::_apMode = doc["ap_mode"].as<bool>();
                 }
                 
+                if (doc.containsKey("ap_name") && !doc["ap_name"].as<String>().isEmpty()) {
+                    WiFiManager::_apName = doc["ap_name"].as<String>();
+                } else {
+                    // Generate a default AP name if not provided
+                    WiFiManager::_apName = "MacroPad_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+                }
+                
                 WiFiManager::saveWiFiConfig();
                 
                 // Schedule restart after response sent
@@ -248,6 +315,82 @@ void WiFiManager::setupWebServer() {
             }
         }
     );
+    
+    // WiFi Scan
+    _server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
+        USBSerial.println("Scanning for WiFi networks...");
+        
+        int networksFound = WiFi.scanNetworks();
+        USBSerial.printf("Found %d networks\n", networksFound);
+        
+        DynamicJsonDocument doc(4096); // Increase size if needed for many networks
+        JsonArray networks = doc.createNestedArray();
+        
+        for (int i = 0; i < networksFound; i++) {
+            JsonObject network = networks.createNestedObject();
+            network["ssid"] = WiFi.SSID(i);
+            network["rssi"] = WiFi.RSSI(i);
+            
+            // Convert encryption type to string
+            String encryptionType = "Unknown";
+            switch (WiFi.encryptionType(i)) {
+                case WIFI_AUTH_OPEN:
+                    encryptionType = "OPEN";
+                    break;
+                case WIFI_AUTH_WEP:
+                    encryptionType = "WEP";
+                    break;
+                case WIFI_AUTH_WPA_PSK:
+                    encryptionType = "WPA";
+                    break;
+                case WIFI_AUTH_WPA2_PSK:
+                    encryptionType = "WPA2";
+                    break;
+                case WIFI_AUTH_WPA_WPA2_PSK:
+                    encryptionType = "WPA/WPA2";
+                    break;
+                case WIFI_AUTH_WPA2_ENTERPRISE:
+                    encryptionType = "WPA2-Enterprise";
+                    break;
+                default:
+                    encryptionType = "Unknown";
+                    break;
+            }
+            network["encryption"] = encryptionType;
+            
+            // Optional: add the channel
+            network["channel"] = WiFi.channel(i);
+            
+            // Optional: add BSSID (MAC address)
+            char bssid[18] = {0};
+            sprintf(bssid, "%02X:%02X:%02X:%02X:%02X:%02X",
+                    WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2],
+                    WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
+            network["bssid"] = bssid;
+        }
+        
+        // Free memory used by WiFi scan
+        WiFi.scanDelete();
+        
+        String output;
+        serializeJson(networks, output);
+        
+        // Add CORS headers
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", output);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+
+    // CORS pre-flight for WiFi scan
+    _server.on("/api/wifi/scan", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
     
     // System Status
     _server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -278,7 +421,7 @@ void WiFiManager::setupWebServer() {
     
     // Get components.json config file
     _server.on("/api/config/components", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/components.json", "application/json");
+        request->send(LittleFS, "/config/components.json", "application/json");
     });
     
     // Update components.json config file
@@ -327,14 +470,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/components.json")) {
+                if (!LittleFS.exists("/config/components.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/components.json", "w");
+                File file = LittleFS.open("/config/components.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -359,7 +502,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/components.json", "r");
+                File verifyFile = LittleFS.open("/config/components.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -411,7 +554,7 @@ void WiFiManager::setupWebServer() {
     
     // Get actions.json config file
     _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/actions.json", "application/json");
+        request->send(LittleFS, "/config/actions.json", "application/json");
     });
     
     // Update actions.json config file
@@ -469,14 +612,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/actions.json")) {
+                if (!LittleFS.exists("/config/actions.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Actions config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/actions.json", "w");
+                File file = LittleFS.open("/config/actions.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open actions config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -502,7 +645,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/actions.json", "r");
+                File verifyFile = LittleFS.open("/config/actions.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify actions config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -554,7 +697,7 @@ void WiFiManager::setupWebServer() {
     
     // Get reports.json config file
     _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/reports.json", "application/json");
+        request->send(LittleFS, "/config/reports.json", "application/json");
     });
     
     // Update reports.json config file
@@ -603,14 +746,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/reports.json")) {
+                if (!LittleFS.exists("/config/reports.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/reports.json", "w");
+                File file = LittleFS.open("/config/reports.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -635,7 +778,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/reports.json", "r");
+                File verifyFile = LittleFS.open("/config/reports.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -686,14 +829,14 @@ void WiFiManager::setupWebServer() {
     });
     
     // Get LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/LEDs.json", "application/json");
+    _server.on("/api/config/leds", HTTP_GET, [](AsyncWebServerRequest *request) {
+        request->send(LittleFS, "/config/leds.json", "application/json");
     });
     
     // Update LEDs.json config file
-    _server.on("/api/config/LEDs", HTTP_POST, 
+    _server.on("/api/config/leds", HTTP_POST, 
         [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing LEDs config update...\"}");
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing leds config update...\"}");
         },
         NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -736,16 +879,16 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/LEDs.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"LEDs config file not found\"}");
+                if (!LittleFS.exists("/config/leds.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Leds config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/LEDs.json", "w");
+                File file = LittleFS.open("/config/leds.json", "w");
                 if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open LEDs config file for writing\"}");
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open leds config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
@@ -760,7 +903,7 @@ void WiFiManager::setupWebServer() {
                 
                 if (file.print(jsonString) != jsonString.length()) {
                     file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write LEDs config to file\"}");
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write leds config to file\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
@@ -768,7 +911,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/LEDs.json", "r");
+                File verifyFile = LittleFS.open("/config/leds.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -793,25 +936,24 @@ void WiFiManager::setupWebServer() {
                 }
 
                 // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LEDs config updated successfully\",\"verified\":true}");
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Leds config updated successfully\",\"verified\":true}");
                 accumulatedData = ""; // Reset for next request
 
                 // Reload the configuration
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-                
                 if (keyHandler) {
                     auto actions = ConfigManager::loadActions("/config/actions.json");
                     keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Key configuration reloaded");
+                    USBSerial.println("Reports configuration reloaded");
                 }
+                USBSerial.println("LED configuration reloaded");
+                // Use the global function to initialize/reload LEDs
+                initializeLED();
             }
         }
     );
 
-    // Add CORS preflight handler for LEDs endpoint
-    _server.on("/api/config/LEDs", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    // Add CORS preflight handler for leds endpoint
+    _server.on("/api/config/leds", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse(200);
         response->addHeader("Access-Control-Allow-Origin", "*");
         response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
@@ -821,7 +963,7 @@ void WiFiManager::setupWebServer() {
     
     // Get info.json config file
     _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(SPIFFS, "/config/info.json", "application/json");
+        request->send(LittleFS, "/config/info.json", "application/json");
     });
     
     // Update info.json config file
@@ -870,14 +1012,14 @@ void WiFiManager::setupWebServer() {
                     return;
                 }
 
-                if (!SPIFFS.exists("/config/info.json")) {
+                if (!LittleFS.exists("/config/info.json")) {
                     request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
                     accumulatedData = ""; // Reset for next request
                     return;
                 }
 
                 // Write the new config directly to the file
-                File file = SPIFFS.open("/config/info.json", "w");
+                File file = LittleFS.open("/config/info.json", "w");
                 if (!file) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
                     accumulatedData = ""; // Reset for next request
@@ -902,7 +1044,7 @@ void WiFiManager::setupWebServer() {
                 file.close();
 
                 // Verify the file was written correctly
-                File verifyFile = SPIFFS.open("/config/info.json", "r");
+                File verifyFile = LittleFS.open("/config/info.json", "r");
                 if (!verifyFile) {
                     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
                     accumulatedData = ""; // Reset for next request
@@ -954,7 +1096,7 @@ void WiFiManager::setupWebServer() {
     
     // Get macros list
     _server.on("/api/macros", HTTP_GET, [](AsyncWebServerRequest *request) {
-        DynamicJsonDocument doc(4096);
+        DynamicJsonDocument doc(32768);  // Increased from 4096 to 32768 (32KB)
         JsonArray macroArray = doc.createNestedArray("macros");
         
         if (macroHandler) {
@@ -967,7 +1109,7 @@ void WiFiManager::setupWebServer() {
                     macroObj["id"] = macro.id;
                     macroObj["name"] = macro.name;
                     macroObj["description"] = macro.description;
-                    // Don't include commands for the listing
+                    macroObj["commands"] = macro.commands;
                 }
             }
         }
@@ -1273,6 +1415,505 @@ void WiFiManager::setupWebServer() {
         request->send(404, "text/plain", "Not found");
     });
     
+    // Add CORS preflight handler for display endpoint
+    _server.on("/api/config/display", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Component actions API endpoints
+    
+    // Get component action by ID
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_GET, [](AsyncWebServerRequest *request) {
+        String componentId = request->pathArg(0);
+        USBSerial.println("Fetching action for component: " + componentId);
+        
+        if (!LittleFS.exists("/config/components.json")) {
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+            return;
+        }
+        
+        // Read components.json
+        File file = LittleFS.open("/config/components.json", "r");
+        if (!file) {
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+            return;
+        }
+        
+        String content = file.readString();
+        file.close();
+        
+        DynamicJsonDocument doc(16384);
+        DeserializationError error = deserializeJson(doc, content);
+        
+        if (error) {
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+            return;
+        }
+        
+        // Find the component with matching ID
+        JsonArray components = doc["components"].as<JsonArray>();
+        JsonObject targetComponent;
+        bool found = false;
+        
+        for (JsonObject component : components) {
+            if (component["id"].as<String>() == componentId) {
+                targetComponent = component;
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Component not found\"}");
+            return;
+        }
+        
+        // Create response with just the action data
+        DynamicJsonDocument responseDoc(1024);
+        
+        // Different response based on component type
+        if (targetComponent["type"] == "encoder") {
+            // For encoders, include clockwise, counterClockwise, and buttonPress actions
+            if (targetComponent.containsKey("clockwise")) {
+                responseDoc["clockwise"] = targetComponent["clockwise"];
+            }
+            if (targetComponent.containsKey("counterClockwise")) {
+                responseDoc["counterClockwise"] = targetComponent["counterClockwise"];
+            }
+            if (targetComponent.containsKey("buttonPress")) {
+                responseDoc["buttonPress"] = targetComponent["buttonPress"];
+            }
+        } else {
+            // For regular buttons/components, just get the action property
+            if (targetComponent.containsKey("action")) {
+                responseDoc["action"] = targetComponent["action"];
+            }
+            if (targetComponent.containsKey("type")) {
+                responseDoc["type"] = targetComponent["type"];
+            }
+        }
+        
+        String responseOutput;
+        serializeJson(responseDoc, responseOutput);
+        request->send(200, "application/json", responseOutput);
+    });
+    
+    // Update component action by ID
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing component action update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            String componentId = request->pathArg(0);
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+            
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+            
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+            
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing component action update for: " + componentId);
+                USBSerial.println("Data: " + accumulatedData);
+                
+                // Validate that we received valid JSON
+                DynamicJsonDocument actionDoc(1024);
+                DeserializationError error = deserializeJson(actionDoc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                if (!LittleFS.exists("/config/components.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Read current components configuration
+                File file = LittleFS.open("/config/components.json", "r");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String content = file.readString();
+                file.close();
+                
+                DynamicJsonDocument doc(16384);
+                DeserializationError docError = deserializeJson(doc, content);
+                
+                if (docError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Find the component with matching ID
+                JsonArray components = doc["components"].as<JsonArray>();
+                bool found = false;
+                
+                for (JsonObject component : components) {
+                    if (component["id"].as<String>() == componentId) {
+                        // Update action properties
+                        if (actionDoc.containsKey("type")) {
+                            component["type"] = actionDoc["type"];
+                        }
+                        if (actionDoc.containsKey("action")) {
+                            component["action"] = actionDoc["action"];
+                        }
+                        if (actionDoc.containsKey("params") && !actionDoc["params"].isNull()) {
+                            component["params"] = actionDoc["params"];
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Component not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Write updated configuration back to the file
+                File writeFile = LittleFS.open("/config/components.json", "w");
+                if (!writeFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String jsonOutput;
+                serializeJson(doc, jsonOutput);
+                
+                if (writeFile.print(jsonOutput) != jsonOutput.length()) {
+                    writeFile.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                writeFile.close();
+                
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Component action updated and configuration reloaded");
+                }
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Component action updated successfully\"}");
+                accumulatedData = ""; // Reset for next request
+            }
+        }
+    );
+    
+    // Update encoder component actions (special endpoint for encoders)
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/encoder-actions$", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing encoder actions update...\"}");
+        },
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            static String accumulatedData = "";
+            String componentId = request->pathArg(0);
+            
+            // Add CORS headers
+            AsyncWebServerResponse *response = request->beginResponse(200);
+            response->addHeader("Access-Control-Allow-Origin", "*");
+            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+            
+            // Handle OPTIONS request for CORS preflight
+            if (request->method() == HTTP_OPTIONS) {
+                request->send(response);
+                return;
+            }
+            
+            // Accumulate the data
+            accumulatedData += String((char*)data, len);
+            
+            // If this is the last chunk, process the complete data
+            if (index + len >= total) {
+                USBSerial.println("Processing encoder actions update for: " + componentId);
+                USBSerial.println("Data: " + accumulatedData);
+                
+                // Validate that we received valid JSON
+                DynamicJsonDocument actionsDoc(2048);
+                DeserializationError error = deserializeJson(actionsDoc, accumulatedData);
+                
+                if (error) {
+                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
+                    request->send(400, "application/json", errorMsg);
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                if (!LittleFS.exists("/config/components.json")) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Components config file not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Read current components configuration
+                File file = LittleFS.open("/config/components.json", "r");
+                if (!file) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String content = file.readString();
+                file.close();
+                
+                DynamicJsonDocument doc(16384);
+                DeserializationError docError = deserializeJson(doc, content);
+                
+                if (docError) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to parse components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Find the component with matching ID
+                JsonArray components = doc["components"].as<JsonArray>();
+                bool found = false;
+                
+                for (JsonObject component : components) {
+                    if (component["id"].as<String>() == componentId && component["type"] == "encoder") {
+                        // Update encoder-specific action properties
+                        if (actionsDoc.containsKey("clockwise") && !actionsDoc["clockwise"].isNull()) {
+                            component["clockwise"] = actionsDoc["clockwise"];
+                        }
+                        
+                        if (actionsDoc.containsKey("counterClockwise") && !actionsDoc["counterClockwise"].isNull()) {
+                            component["counterClockwise"] = actionsDoc["counterClockwise"];
+                        }
+                        
+                        if (actionsDoc.containsKey("buttonPress") && !actionsDoc["buttonPress"].isNull()) {
+                            component["buttonPress"] = actionsDoc["buttonPress"];
+                        }
+                        
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Encoder component not found\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                // Write updated configuration back to the file
+                File writeFile = LittleFS.open("/config/components.json", "w");
+                if (!writeFile) {
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open components config file for writing\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                String jsonOutput;
+                serializeJson(doc, jsonOutput);
+                
+                if (writeFile.print(jsonOutput) != jsonOutput.length()) {
+                    writeFile.close();
+                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write components config\"}");
+                    accumulatedData = ""; // Reset for next request
+                    return;
+                }
+                
+                writeFile.close();
+                
+                // Reload the configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Encoder actions updated and configuration reloaded");
+                }
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Encoder actions updated successfully\"}");
+                accumulatedData = ""; // Reset for next request
+            }
+        }
+    );
+    
+    // Add CORS preflight handlers for component action endpoints
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/action$", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    _server.on("^/api/components/([a-zA-Z0-9_-]+)/encoder-actions$", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Macro API Endpoints
+    
+    // Get macros list
+    // ... existing code ...
+
+    // Add after the existing API endpoints but before the macros section
+    
+    // Restore configuration from defaults
+    _server.on("/api/config/restore", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            // Check for config parameter
+            if (!request->hasParam("config")) {
+                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing config parameter\"}");
+                return;
+            }
+            
+            String configName = request->getParam("config")->value();
+            USBSerial.printf("Restoring %s configuration from defaults\n", configName.c_str());
+            
+            // Validate config name
+            String validConfigs[] = {"info", "components", "leds", "actions", "reports", "display"};
+            bool isValidConfig = false;
+            
+            for (const String& validConfig : validConfigs) {
+                if (configName == validConfig) {
+                    isValidConfig = true;
+                    break;
+                }
+            }
+            
+            if (!isValidConfig) {
+                request->send(400, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Invalid config name. Valid options: info, components, leds, actions, reports, display\"}");
+                return;
+            }
+            
+            // Check if default file exists
+            String defaultFilePath = "/config/defaults/" + configName + ".json";
+            String configFilePath = "/config/" + configName + ".json";
+            
+            if (!LittleFS.exists(defaultFilePath)) {
+                request->send(404, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Default configuration not found\"}");
+                return;
+            }
+            
+            // Read default file
+            File srcFile = LittleFS.open(defaultFilePath, "r");
+            if (!srcFile) {
+                request->send(500, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Failed to open default configuration file\"}");
+                return;
+            }
+            
+            // Create destination file
+            File destFile = LittleFS.open(configFilePath, "w");
+            if (!destFile) {
+                srcFile.close();
+                request->send(500, "application/json", 
+                    "{\"status\":\"error\",\"message\":\"Failed to open configuration file for writing\"}");
+                return;
+            }
+            
+            // Copy file contents
+            uint8_t buffer[512];
+            size_t bytesRead;
+            
+            while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+                destFile.write(buffer, bytesRead);
+            }
+            
+            srcFile.close();
+            destFile.close();
+            
+            // Reload configuration if needed
+            if (configName == "leds") {
+                // Reload LED configuration
+                initializeLED();
+                USBSerial.println("LED configuration restored and reloaded");
+            } else if (configName == "actions") {
+                // Reload key configuration
+                if (keyHandler) {
+                    auto actions = ConfigManager::loadActions("/config/actions.json");
+                    keyHandler->loadKeyConfiguration(actions);
+                    USBSerial.println("Actions configuration restored and reloaded");
+                }
+            }
+            
+            // Return success response
+            request->send(200, "application/json", 
+                "{\"status\":\"success\",\"message\":\"Configuration restored successfully\"}");
+        }
+    );
+    
+    // Add CORS preflight handler for restore endpoint
+    _server.on("/api/config/restore", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+    
+    // Reset LEDs to default configuration
+    _server.on("/api/led/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+        USBSerial.println("Resetting LED configuration to default");
+        
+        // Check if default config exists
+        if (LittleFS.exists("/config/defaults/leds.json")) {
+            File srcFile = LittleFS.open("/config/defaults/leds.json", "r");
+            File destFile = LittleFS.open("/config/leds.json", "w");
+            
+            if (srcFile && destFile) {
+                // Copy file contents
+                uint8_t buffer[512];
+                size_t bytesRead;
+                
+                while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+                    destFile.write(buffer, bytesRead);
+                }
+                
+                srcFile.close();
+                destFile.close();
+                
+                // Reload LED configuration
+                initializeLED();
+                
+                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"LED configuration reset successfully\"}");
+                return;
+            } else {
+                if (srcFile) srcFile.close();
+                if (destFile) destFile.close();
+            }
+        }
+        
+        request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to reset LED configuration\"}");
+    });
+    
     // Start server
     _server.begin();
     
@@ -1510,25 +2151,22 @@ void WiFiManager::update() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Show on display
-            showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
+            // Remove display message to prevent screen refresh
+            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
             
             // Broadcast connection status
             broadcastStatus();
         } else {
             // Check if connection attempt timed out
             if (millis() - _connectAttemptStart > CONNECT_TIMEOUT) {
-                USBSerial.println("WiFi connection timed out. Switching to AP mode.");
+                USBSerial.println("WiFi connection timed out.");
                 
-                // Show on display
-                showTemporaryMessage("WiFi connection timed out.\nSwitching to AP mode...", 3000);
+                // In dual mode, we don't need to switch modes since we already have an AP running
+                // Just log that the connection failed
+                USBSerial.println("Operating in dual mode with AP only.");
                 
-                // Switch to AP mode
-                _apMode = true;
-                saveWiFiConfig();
-                
-                // Restart to apply changes
-                ESP.restart();
+                // Reset the connection attempt timer
+                _connectAttemptStart = millis();
             }
         }
     }
@@ -1573,8 +2211,8 @@ void WiFiManager::broadcastStatus() {
 }
 
 void WiFiManager::loadWiFiConfig() {
-    if (SPIFFS.exists("/config/wifi.json")) {
-        File file = SPIFFS.open("/config/wifi.json", "r");
+    if (LittleFS.exists("/config/wifi.json")) {
+        File file = LittleFS.open("/config/wifi.json", "r");
         if (file) {
             String json = file.readString();
             file.close();
@@ -1586,6 +2224,7 @@ void WiFiManager::loadWiFiConfig() {
                 _ssid = doc["ssid"] | "MacroPad";
                 _password = doc["password"] | "macropad123";
                 _apMode = doc["ap_mode"] | true;
+                _apName = doc["ap_name"] | "MacroPad_AP";
                 
                 USBSerial.println("WiFi configuration loaded");
             }
@@ -1601,11 +2240,12 @@ void WiFiManager::saveWiFiConfig() {
     doc["ssid"] = _ssid;
     doc["password"] = _password;
     doc["ap_mode"] = _apMode;
+    doc["ap_name"] = _apName;
     
     String json;
     serializeJson(doc, json);
     
-    File file = SPIFFS.open("/config/wifi.json", "w");
+    File file = LittleFS.open("/config/wifi.json", "w");
     if (file) {
         file.print(json);
         file.close();
@@ -1624,21 +2264,21 @@ void WiFiManager::resetToDefaults() {
     
     // Reset other configs as needed
     // e.g., copy default configs to active configs
-    if (SPIFFS.exists("/defaults/LEDs.json")) {
-        File srcFile = SPIFFS.open("/defaults/LEDs.json", "r");
-        File destFile = SPIFFS.open("/config/LEDs.json", "w");
+    if (LittleFS.exists("/config/defaults/leds.json")) {
+        File srcFile = LittleFS.open("/config/defaults/leds.json", "r");
+        File destFile = LittleFS.open("/config/leds.json", "w");
         
         if (srcFile && destFile) {
+            size_t fileSize = srcFile.size();
             uint8_t buffer[512];
-            size_t bytesRead;
             
-            while ((bytesRead = srcFile.read(buffer, sizeof(buffer))) > 0) {
+            while (srcFile.available()) {
+                size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
                 destFile.write(buffer, bytesRead);
             }
             
             srcFile.close();
             destFile.close();
-            USBSerial.println("LED configuration reset to defaults");
         }
     }
     
@@ -1667,11 +2307,11 @@ String serializedJson(const String& jsonStr) {
 // Helper function to lookup key names from reports
 String lookupKeyName(const uint8_t* report, size_t reportSize, bool isConsumer) {
     // Load reports.json
-    if (!SPIFFS.exists("/config/reports.json")) {
+    if (!LittleFS.exists("/config/reports.json")) {
         return "Unknown";
     }
     
-    File file = SPIFFS.open("/config/reports.json", "r");
+    File file = LittleFS.open("/config/reports.json", "r");
     if (!file) {
         return "Error";
     }

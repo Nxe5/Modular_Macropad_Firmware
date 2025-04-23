@@ -1,0 +1,48 @@
+{
+  "id": "mouse_jiggler",
+  "name": "Mouse Jiggler",
+  "description": "Moves the mouse cursor in a small circular pattern to prevent screen timeout. Useful for keeping systems active during long periods of inactivity. The movement is subtle enough not to interfere with normal work but sufficient to prevent system sleep.",
+  "commands": [
+    {
+      "type": "mouse_move",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "mouse_move",
+      "x": 0,
+      "y": 5
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "mouse_move",
+      "x": -5,
+      "y": 0
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "mouse_move",
+      "x": 0,
+      "y": -5
+    },
+    {
+      "type": "delay",
+      "milliseconds": 100
+    },
+    {
+      "type": "mouse_move",
+      "x": 0,
+      "y": 0
+    }
+  ]
+} 

@@ -1,0 +1,85 @@
+{
+  "active_mode": "config",
+  "modes": {
+    "test": {
+      "name": "Test Display",
+      "description": "Simple test display for debugging",
+      "refresh_rate": 2000,
+      "backgroundImage": "/images/background.jpg",
+      "elements": [
+        {
+          "type": "text",
+          "text": "TEST MODE",
+          "x": 70,
+          "y": 100,
+          "color": "white",
+          "size": 2
+        },
+        {
+          "type": "line",
+          "x": 50,
+          "y": 130,
+          "end_x": 200,
+          "end_y": 130,
+          "color": "blue"
+        }
+      ]
+    },
+    "config": {
+      "name": "Configuration Display",
+      "description": "Shows current configuration and status",
+      "refresh_rate": 2000,
+      "backgroundImage": "/images/background.jpg",
+      "elements": [
+        {
+          "type": "text",
+          "text": "0cho Labs Macropad",
+          "x": 40,
+          "y": 25,
+          "color": "white",
+          "size": 2
+        },
+        {
+          "type": "line",
+          "x": 20,
+          "y": 50,
+          "end_x": 220,
+          "end_y": 50,
+          "color": "0x001F"
+        },
+        {
+          "type": "text",
+          "text": "WiFi: {wifi_status}",
+          "x": 70,
+          "y": 75,
+          "color": "0x07FF",
+          "size": 1
+        },
+        {
+          "type": "text",
+          "text": "IP: {ip_address}",
+          "x": 70,
+          "y": 95,
+          "color": "0xFFFF",
+          "size": 1
+        },
+        {
+          "type": "text",
+          "text": "Layer: {layer}",
+          "x": 70,
+          "y": 115,
+          "color": "0x07FF",
+          "size": 1
+        },
+        {
+          "type": "text",
+          "text": "Macro: {macro_status}",
+          "x": 70,
+          "y": 135,
+          "color": "0x07E0",
+          "size": 1
+        }
+      ]
+    }
+  }
+}

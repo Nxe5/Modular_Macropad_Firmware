@@ -5,8 +5,25 @@
 #include "lwip/inet.h"
 
 #include "FS.h"
-#include "SPIFFS.h"
+// #include "SPIFFS.h" - Replaced with LittleFS
+#include <LittleFS.h>
 #include "ArduinoJson.h"
+
+// Directly include ESP32 LittleFS implementation headers for more control
+#include "esp_littlefs.h"
+
+// Forward declarations for internal LittleFS functions if not already defined
+extern "C" {
+    esp_err_t esp_littlefs_format(const char* partition_label);
+    
+    typedef struct {
+        const char* partition_label;
+        size_t partition_size;
+        bool dont_mount;
+    } esp_littlefs_format_opts_t;
+    
+    esp_err_t esp_littlefs_format_opts(const esp_littlefs_format_opts_t* opts);
+}
 
 // Modules
 #include "ModuleSetup.h"
@@ -27,31 +44,43 @@
 
 #include "WiFiManager.h"
 
+#include "FileSystemUtils.h"
+
+#include "VersionManager.h"
+
+#include "OTAUpdateManager.h"
+
+// Forward declarations
+void createWorkingActionsFile();
+
+// Initialize USB devices
+USBHIDKeyboard Keyboard;
+USBHIDConsumerControl ConsumerControl;
+USBHIDMouse Mouse;  // Optional if you need mouse controls
+USBCDC USBSerial;
+
 // Forward declarations for Display functions
 extern void updateDisplay();
 
-// Forward declaration for USBSerial before it's used in the diagnostic functions
-extern USBCDC USBSerial;
-
-// SPIFFS Diagnostics functions for troubleshooting
+// LittleFS Diagnostics functions for troubleshooting
 // Global state for diagnostics
 bool diagnosticsEnabled = false;
 unsigned long lastDiagnosticTime = 0;
 uint8_t currentTest = 0;
 bool testCompleted = false;
 
-// Check available storage space in SPIFFS
+// Enhanced filesystem diagnostics with our FileSystemUtils
 void checkStorage() {
-    size_t totalBytes = SPIFFS.totalBytes();
-    size_t usedBytes = SPIFFS.usedBytes();
+    size_t totalBytes = LittleFS.totalBytes();
+    size_t usedBytes = LittleFS.usedBytes();
     size_t freeBytes = totalBytes - usedBytes;
     
-    USBSerial.printf("SPIFFS: %u total bytes, %u used bytes, %u free bytes\n", 
+    USBSerial.printf("LittleFS: %u total bytes, %u used bytes, %u free bytes\n", 
                     totalBytes, usedBytes, freeBytes);
     USBSerial.printf("Storage usage: %.1f%%\n", (float)usedBytes * 100 / totalBytes);
     
     if (freeBytes < 50000) {  // Warn if less than 50KB free
-        USBSerial.println("WARNING: Low storage space on SPIFFS!");
+        USBSerial.println("WARNING: Low storage space on LittleFS!");
     }
 }
 
@@ -60,25 +89,19 @@ void testPathLength() {
     USBSerial.println("Testing path length limitations...");
     
     // Test with short path
-    File shortPath = SPIFFS.open("/test_short.txt", "w");
-    if (!shortPath) {
-        USBSerial.println("Failed to create short path file");
-    } else {
-        shortPath.println("test");
-        shortPath.close();
+    if (FileSystemUtils::writeFile("/test_short.txt", "test")) {
         USBSerial.println("Short path file created successfully");
-        SPIFFS.remove("/test_short.txt");
+        LittleFS.remove("/test_short.txt");
+    } else {
+        USBSerial.println("Failed to create short path file");
     }
     
     // Test with path similar to the problematic ones
-    File longPath = SPIFFS.open("/web/_app/immutable/nodes/test_long.js", "w");
-    if (!longPath) {
-        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
-    } else {
-        longPath.println("test");
-        longPath.close();
+    if (FileSystemUtils::writeFile("/web/_app/immutable/nodes/test_long.js", "test")) {
         USBSerial.println("Long path file created successfully");
-        SPIFFS.remove("/web/_app/immutable/nodes/test_long.js");
+        FileSystemUtils::deleteFileAndDirs("/web/_app/immutable/nodes/test_long.js");
+    } else {
+        USBSerial.println("Failed to create long path file - PATH LENGTH ISSUE CONFIRMED");
     }
 }
 
@@ -87,23 +110,19 @@ void testFilenames() {
     USBSerial.println("Testing filename restrictions...");
     
     // Test with simple filename
-    File simpleFile = SPIFFS.open("/simple.js", "w");
-    if (!simpleFile) {
-        USBSerial.println("Failed to create simple filename");
-    } else {
-        simpleFile.close();
+    if (FileSystemUtils::writeFile("/simple.js", "test")) {
         USBSerial.println("Simple filename works");
-        SPIFFS.remove("/simple.js");
+        FileSystemUtils::deleteFileAndDirs("/simple.js");
+    } else {
+        USBSerial.println("Failed to create simple filename");
     }
     
     // Test with hash-based filename (similar to SvelteKit output)
-    File hashFile = SPIFFS.open("/test.DWAvjrHy.js", "w");
-    if (!hashFile) {
-        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
-    } else {
-        hashFile.close();
+    if (FileSystemUtils::writeFile("/test.DWAvjrHy.js", "test")) {
         USBSerial.println("Hash-based filename works");
-        SPIFFS.remove("/test.DWAvjrHy.js");
+        FileSystemUtils::deleteFileAndDirs("/test.DWAvjrHy.js");
+    } else {
+        USBSerial.println("Failed to create hash-based filename - FILENAME ISSUE CONFIRMED");
     }
 }
 
@@ -114,49 +133,25 @@ void testFragmentation() {
     // Create a set of small files
     for (int i = 0; i < 10; i++) {
         String filename = "/frag_test_" + String(i) + ".txt";
-        File f = SPIFFS.open(filename, "w");
-        if (f) {
-            // Write 1KB of data
-            for (int j = 0; j < 20; j++) {
-                f.println("This is test data for fragmentation testing. Line " + String(j));
-            }
-            f.close();
-        } else {
+        String content = "";
+        // Write 1KB of data
+        for (int j = 0; j < 20; j++) {
+            content += "This is test data for fragmentation testing. Line " + String(j) + "\n";
+        }
+        
+        if (!FileSystemUtils::writeFile(filename.c_str(), content)) {
             USBSerial.println("Failed to create test file - possible FRAGMENTATION ISSUE");
             break;
         }
     }
     
-    // Try to create one larger file (50KB)
-    File largeFile = SPIFFS.open("/large_test.bin", "w");
-    if (largeFile) {
-        char buffer[1024];
-        memset(buffer, 'A', sizeof(buffer));
-        
-        bool writeSuccess = true;
-        for (int i = 0; i < 50; i++) {
-            if (largeFile.write((uint8_t*)buffer, sizeof(buffer)) != sizeof(buffer)) {
-                USBSerial.println("Failed to write large file block - FRAGMENTATION ISSUE CONFIRMED");
-                writeSuccess = false;
-                break;
-            }
-        }
-        
-        largeFile.close();
-        
-        if (writeSuccess) {
-            USBSerial.println("Successfully wrote large file - fragmentation not detected");
-        }
-        
-        SPIFFS.remove("/large_test.bin");
-    } else {
-        USBSerial.println("Failed to create large test file - possible FRAGMENTATION ISSUE");
-    }
+    // Try a more comprehensive performance test
+    FileSystemUtils::testPerformance("/large_test.bin", 1024, 50);
     
     // Clean up test files
     for (int i = 0; i < 10; i++) {
         String filename = "/frag_test_" + String(i) + ".txt";
-        SPIFFS.remove(filename);
+        FileSystemUtils::deleteFileAndDirs(filename.c_str());
     }
 }
 
@@ -170,42 +165,37 @@ void runDiagnostics() {
     
     switch (currentTest) {
         case 0:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: STORAGE CHECK ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: STORAGE CHECK ---");
             checkStorage();
             currentTest++;
             break;
             
         case 1:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: PATH LENGTH TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: PATH LENGTH TEST ---");
             testPathLength();
             currentTest++;
             break;
             
         case 2:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FILENAME TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: FILENAME TEST ---");
             testFilenames();
             currentTest++;
             break;
             
         case 3:
-            USBSerial.println("\n--- SPIFFS DIAGNOSTICS: FRAGMENTATION TEST ---");
+            USBSerial.println("\n--- LITTLEFS DIAGNOSTICS: FRAGMENTATION TEST ---");
             testFragmentation();
             currentTest++;
             break;
             
         default:
             if (!testCompleted) {
-                USBSerial.println("\n--- SPIFFS DIAGNOSTICS COMPLETE ---");
+                USBSerial.println("\n--- LITTLEFS DIAGNOSTICS COMPLETE ---");
                 testCompleted = true;
             }
             break;
     }
 }
-
-USBHIDKeyboard Keyboard;
-USBHIDConsumerControl ConsumerControl;
-USBHIDMouse Mouse;  // Optional if you need mouse controls
-USBCDC USBSerial;
 
 // Flag to indicate if USB server should be initialized
 // IMPORTANT: Set this to false to disable USB server completely
@@ -287,7 +277,88 @@ void configurePinModes(uint8_t* rowPins, uint8_t* colPins, uint8_t rows, uint8_t
     Serial.println("Pin configuration complete\n");
 }
 
-// initializeKeyHandler() using a 5x5 grid and loading actions via ConfigManager
+// Function to debug actions configuration
+void debugActionsConfig() {
+    auto actions = ConfigManager::loadActions("/config/actions.json");
+    
+    USBSerial.println("\n=== Actions Configuration Debug ===");
+    for (const auto& pair : actions) {
+        USBSerial.printf("Button ID: %s, Type: %s\n", 
+                    pair.first.c_str(), 
+                    pair.second.type.c_str());
+        
+        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
+            USBSerial.print("  Consumer Report: ");
+            for (const auto& hex : pair.second.consumerReport) {
+                USBSerial.printf("%s ", hex.c_str());
+            }
+            USBSerial.println();
+        }
+    }
+    USBSerial.println("==================================\n");
+}
+
+// Helper function to create a working actions.json file
+void createWorkingActionsFile() {
+    USBSerial.println("\n==== CREATING WORKING ACTIONS FILE ====");
+    
+    // Create a simple but working actions.json file with common buttons configured
+    // Using a simpler structure with just enough buttons to test
+    String workingActions = R"({
+  "actions": {
+    "layers": [
+      {
+        "layer-name": "default-actions-layer",
+        "active": true,
+        "layer-config": {
+          "button-1": {"type": "cycle-layer"},
+          "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x05", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x06", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+        }
+      },
+      {
+        "layer-name": "Nxe5-actions-layer",
+        "active": false,
+        "layer-config": {
+          "button-1": {"type": "cycle-layer"},
+          "button-2": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x07", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-3": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x08", "0x00", "0x00", "0x00", "0x00", "0x00"]},
+          "button-4": {"type": "hid", "buttonPress": ["0x00", "0x00", "0x09", "0x00", "0x00", "0x00", "0x00", "0x00"]}
+        }
+      }
+    ]
+  }
+})";
+
+    // Create both possible directory paths
+    FileSystemUtils::createDirPath("/data/config");
+    FileSystemUtils::createDirPath("/config");
+    
+    // Save to both possible locations to ensure it's found
+    bool success1 = FileSystemUtils::writeFile("/data/config/actions.json", workingActions);
+    bool success2 = FileSystemUtils::writeFile("/config/actions.json", workingActions);
+    
+    if (success1 && success2) {
+        USBSerial.println("Created working actions.json files in both locations");
+    } else if (success1) {
+        USBSerial.println("Created working actions.json file in /data/config only");
+    } else if (success2) {
+        USBSerial.println("Created working actions.json file in /config only");
+    } else {
+        USBSerial.println("Failed to create working actions.json file in either location");
+    }
+}
+
+void keyboardTask(void *pvParameters) {
+    while (true) {
+        if (keyHandler) {
+            keyHandler->updateKeys();
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));  // Scan every 10ms (adjust as needed)
+    }
+}
+
 void initializeKeyHandler() {
     const uint8_t rows = 5;
     const uint8_t cols = 5;
@@ -325,7 +396,22 @@ void initializeKeyHandler() {
         // Load actions configuration
         USBSerial.println("Loading key action configuration...");
         auto actions = ConfigManager::loadActions("/config/actions.json");
+        
+        if (actions.empty()) {
+            USBSerial.println("WARNING: No actions loaded from config file!");
+            
+            // Try the backup default configuration or create a simple one
+            USBSerial.println("Creating default working actions configuration");
+            createWorkingActionsFile();
+            actions = ConfigManager::loadActions("/data/config/actions.json");
+        }
+        
         keyHandler->loadKeyConfiguration(actions);
+        
+        // Make sure to apply the current layer configurations
+        String currentLayer = keyHandler->getCurrentLayer();
+        USBSerial.printf("Applying current layer: %s\n", currentLayer.c_str());
+        keyHandler->applyLayerToActionMap(currentLayer);
         
         USBSerial.println("Key handler initialization complete");
     } else {
@@ -427,37 +513,6 @@ void initializeEncoderHandler() {
     }
 }
 
-
-// Function to debug actions configuration
-void debugActionsConfig() {
-    auto actions = ConfigManager::loadActions("/config/actions.json");
-    
-    USBSerial.println("\n=== Actions Configuration Debug ===");
-    for (const auto& pair : actions) {
-        USBSerial.printf("Button ID: %s, Type: %s\n", 
-                    pair.first.c_str(), 
-                    pair.second.type.c_str());
-        
-        if (pair.second.type == "multimedia" && !pair.second.consumerReport.empty()) {
-            USBSerial.print("  Consumer Report: ");
-            for (const auto& hex : pair.second.consumerReport) {
-                USBSerial.printf("%s ", hex.c_str());
-            }
-            USBSerial.println();
-        }
-    }
-    USBSerial.println("==================================\n");
-}
-
-void keyboardTask(void *pvParameters) {
-    while (true) {
-        if (keyHandler) {
-            keyHandler->updateKeys();
-        }
-        vTaskDelay(pdMS_TO_TICKS(10));  // Scan every 10ms (adjust as needed)
-    }
-}
-
 void encoderTask(void *pvParameters) {
     while (true) {
         if (encoderHandler) {
@@ -477,8 +532,280 @@ void usbServerTask(void *pvParameters) {
     USBSerial.println("Starting USB Server initialization task");
 }
 
+// Create default configuration files if they don't exist using improved approach
+void createDefaultConfigFiles() {
+    USBSerial.println("Creating default config files...");
+    
+    // Default components.json
+    String defaultComponents = R"({
+        "components": [
+            {
+                "id": "button-0",
+                "type": "button",
+                "size": { "rows": 1, "columns": 1 },
+                "start_location": { "row": 0, "column": 0 }
+            }
+        ]
+    })";
+    
+    // Default actions.json
+    String defaultActions = R"({
+        "actions": {
+            "layer-config": {
+                "button-0": {
+                    "type": "hid",
+                    "buttonPress": ["0x00", "0x00", "0x04", "0x00", "0x00", "0x00", "0x00", "0x00"]
+                }
+            }
+        }
+    })";
+    
+    // Default reports.json
+    String defaultReports = R"({
+        "reports": {
+            "hid": {
+                "0x00_0x00_0x04_0x00_0x00_0x00_0x00_0x00": "a"
+            },
+            "consumer": {}
+        }
+    })";
+    
+    // Default info.json
+    String defaultInfo = R"({
+        "name": "Modular Macropad",
+        "version": "1.0.0",
+        "author": "User",
+        "description": "Default configuration",
+        "module-size": "full",
+        "gridSize": { "rows": 3, "columns": 4 },
+        "defaults": {},
+        "settings": {},
+        "supportedComponentTypes": ["button", "encoder", "display"]
+    })";
+
+    // Create config files using our new utility class with automatic directory creation
+    bool success = true;
+    
+    if (!FileSystemUtils::fileExists("/config/components.json")) {
+        success &= FileSystemUtils::writeFile("/config/components.json", defaultComponents);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/actions.json")) {
+        success &= FileSystemUtils::writeFile("/config/actions.json", defaultActions);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/reports.json")) {
+        success &= FileSystemUtils::writeFile("/config/reports.json", defaultReports);
+    }
+    
+    if (!FileSystemUtils::fileExists("/config/info.json")) {
+        success &= FileSystemUtils::writeFile("/config/info.json", defaultInfo);
+    }
+    
+    // No longer create files in /data/config
+    
+    if (success) {
+        USBSerial.println("All default config files created successfully");
+    } else {
+        USBSerial.println("Some config files could not be created");
+    }
+}
+
+// List all files in a directory recursively using the new utility class
+void listDir(const char * dirname, uint8_t levels) {
+    FileSystemUtils::listDir(dirname, levels);
+}
+
+// Helper function to dump actions.json file content
+void dumpActionsFile() {
+    USBSerial.println("\n==== ACTIONS FILE DUMP ====");
+    
+    // Check both possible locations
+    const char* paths[] = {"/config/actions.json", "/data/config/actions.json"};
+    
+    for (const char* path : paths) {
+        USBSerial.printf("Checking path: %s\n", path);
+        
+        if (FileSystemUtils::fileExists(path)) {
+            USBSerial.printf("File exists at %s\n", path);
+            
+            // Get file size
+            File file = LittleFS.open(path, "r");
+            if (file) {
+                size_t fileSize = file.size();
+                USBSerial.printf("File size: %d bytes\n", fileSize);
+                
+                // Read and print file contents
+                if (fileSize > 0) {
+                    String content = file.readString();
+                    USBSerial.println("File content:");
+                    USBSerial.println(content);
+                } else {
+                    USBSerial.println("File is empty!");
+                }
+                file.close();
+            } else {
+                USBSerial.println("Failed to open file");
+            }
+        } else {
+            USBSerial.printf("File does not exist at %s\n", path);
+        }
+    }
+    
+    USBSerial.println("==== END OF DUMP ====\n");
+}
+
+// Helper function for detailed filesystem diagnostics
+void runFilesystemDiagnostics() {
+    USBSerial.println("\n==== DETAILED FILESYSTEM DIAGNOSTICS ====");
+    
+    // Check if LittleFS is mounted
+    if (!LittleFS.begin(false)) {
+        USBSerial.println("ERROR: LittleFS not mounted!");
+        return;
+    }
+    
+    // Get filesystem info - this is different for ESP32
+    USBSerial.printf("Filesystem Info:\n");
+    USBSerial.printf("  Total space: %u bytes\n", LittleFS.totalBytes());
+    USBSerial.printf("  Used space: %u bytes\n", LittleFS.usedBytes());
+    USBSerial.printf("  Free space: %u bytes\n", LittleFS.totalBytes() - LittleFS.usedBytes());
+    
+    // Check and list root directory
+    File root = LittleFS.open("/");
+    if (!root) {
+        USBSerial.println("ERROR: Failed to open root directory");
+        return;
+    }
+    
+    if (!root.isDirectory()) {
+        USBSerial.println("ERROR: Root is not a directory");
+        return;
+    }
+    
+    // List base directories
+    USBSerial.println("\nBase directories:");
+    String baseDirs[] = {"/data", "/data/config", "/config", "/web", "/macros"};
+    for (const String& dir : baseDirs) {
+        if (LittleFS.exists(dir)) {
+            USBSerial.printf("  %s - EXISTS\n", dir.c_str());
+            
+            // Check if really a directory
+            File testDir = LittleFS.open(dir);
+            if (!testDir) {
+                USBSerial.printf("    ERROR: Could not open %s\n", dir.c_str());
+                continue;
+            }
+            
+            if (!testDir.isDirectory()) {
+                USBSerial.printf("    WARNING: %s exists but is not a directory!\n", dir.c_str());
+                continue;
+            }
+            
+            // List files in this directory
+            USBSerial.printf("    Files in %s:\n", dir.c_str());
+            File dirObj = LittleFS.open(dir);
+            File file = dirObj.openNextFile();
+            bool filesFound = false;
+            
+            while (file) {
+                filesFound = true;
+                String fileName = file.name();
+                if (fileName.startsWith("/")) {
+                    fileName = fileName.substring(1); // Remove leading slash
+                }
+                
+                if (file.isDirectory()) {
+                    USBSerial.printf("      DIR: %s\n", fileName.c_str());
+                } else {
+                    USBSerial.printf("      FILE: %s (%u bytes)\n", fileName.c_str(), file.size());
+                }
+                file = dirObj.openNextFile();
+            }
+            
+            if (!filesFound) {
+                USBSerial.println("      No files found");
+            }
+            
+        } else {
+            USBSerial.printf("  %s - MISSING\n", dir.c_str());
+        }
+    }
+    
+    // Check specific important files
+    USBSerial.println("\nImportant configuration files:");
+    String important[] = {
+        "/data/config/actions.json", 
+        "/config/actions.json",
+        "/data/config/components.json",
+        "/config/components.json"
+    };
+    
+    for (const String& path : important) {
+        if (LittleFS.exists(path)) {
+            File file = LittleFS.open(path, "r");
+            if (!file) {
+                USBSerial.printf("  %s - EXISTS but cannot be opened\n", path.c_str());
+                continue;
+            }
+            
+            size_t size = file.size();
+            USBSerial.printf("  %s - EXISTS (%u bytes)\n", path.c_str(), size);
+            
+            // Print file preview (first 200 chars)
+            if (size > 0) {
+                USBSerial.println("  --- File Content Preview: ---");
+                size_t previewLen = min(200, (int)size);
+                char preview[201] = {0};
+                size_t read = file.readBytes(preview, previewLen);
+                preview[read] = '\0';
+                USBSerial.println(preview);
+                USBSerial.println("  --- End Preview ---");
+                
+                // Check if it's valid JSON
+                if (path.endsWith(".json")) {
+                    file.seek(0); // Reset to beginning
+                    String content = file.readString();
+                    
+                    // Try to parse with DynamicJsonDocument
+                    USBSerial.println("  Checking JSON validity...");
+                    DynamicJsonDocument doc(4096);
+                    DeserializationError error = deserializeJson(doc, content);
+                    
+                    if (error) {
+                        USBSerial.printf("  JSON INVALID: %s\n", error.c_str());
+                    } else {
+                        USBSerial.println("  JSON is valid");
+                        
+                        // For actions.json, check layer-config
+                        if (path.endsWith("actions.json")) {
+                            if (doc.containsKey("actions") && doc["actions"].containsKey("layer-config")) {
+                                JsonObject layerConfig = doc["actions"]["layer-config"];
+                                int buttonCount = 0;
+                                for (JsonPair p : layerConfig) {
+                                    buttonCount++;
+                                }
+                                USBSerial.printf("  Contains layer-config with %d button configurations\n", buttonCount);
+                            } else {
+                                USBSerial.println("  WARNING: Missing actions or layer-config structure!");
+                            }
+                        }
+                    }
+                }
+            } else {
+                USBSerial.println("  File is empty!");
+            }
+            file.close();
+        } else {
+            USBSerial.printf("  %s - MISSING\n", path.c_str());
+        }
+    }
+    
+    USBSerial.println("==== END DIAGNOSTICS ====\n");
+}
+
 void setup() {
-    // Initialize USB with both HID and CDC
+    // Initialize USB in Serial mode
     USB.begin();
     USBSerial.begin();
 
@@ -488,42 +815,41 @@ void setup() {
     USBSerial.println(TAG);
     USBSerial.println("Starting device initialization");
     
+    // Print memory diagnostics at startup
+    USBSerial.printf("Initial free heap: %d bytes\n", ESP.getFreeHeap());
+    USBSerial.printf("Total heap size: %d bytes\n", ESP.getHeapSize());
+    
+    #ifdef BOARD_HAS_PSRAM
+    USBSerial.printf("PSRAM size: %d bytes\n", ESP.getPsramSize());
+    USBSerial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
+    #endif
+    
     // Initialize HID components
     ConsumerControl.begin();
     USBSerial.println("HID Consumer Control initialized");
+    Mouse.begin();
+    USBSerial.println("HID Mouse initialized");
+    Keyboard.begin();
+    USBSerial.println("HID Keyboard initialized");
     
-    // Mount SPIFFS for configuration files
-    if (!SPIFFS.begin(true)) {
-        USBSerial.println("Failed to mount SPIFFS");
+    // Initialize LittleFS with improved approach
+    USBSerial.println("Initializing filesystem...");
+    if (FileSystemUtils::begin(true)) {
+        USBSerial.println("LittleFS filesystem is operational");
+        
+        // Create only the necessary directories matching old firmware
+        FileSystemUtils::createDirPath("/config");
+        FileSystemUtils::createDirPath("/web");
+        FileSystemUtils::createDirPath("/macros");
+        
+        // Create default configuration files
+        createDefaultConfigFiles();
+        
+        // List all files in the filesystem
+        USBSerial.println("Filesystem contents:");
+        FileSystemUtils::listDir("/", 2);
     } else {
-        USBSerial.println("SPIFFS mounted successfully");
-        
-        // Create config directory if it doesn't exist
-        if (!SPIFFS.exists("/config")) {
-            if (SPIFFS.mkdir("/config")) {
-                USBSerial.println("Created /config directory");
-            } else {
-                USBSerial.println("Failed to create /config directory");
-            }
-        }
-        
-        // Create web directory if it doesn't exist
-        if (!SPIFFS.exists("/web")) {
-            if (SPIFFS.mkdir("/web")) {
-                USBSerial.println("Created /web directory");
-            } else {
-                USBSerial.println("Failed to create /web directory");
-            }
-        }
-        
-        // Create macros directory if it doesn't exist
-        if (!SPIFFS.exists("/macros")) {
-            if (SPIFFS.mkdir("/macros")) {
-                USBSerial.println("Created /macros directory");
-            } else {
-                USBSerial.println("Failed to create /macros directory");
-            }
-        }
+        USBSerial.println("WARNING: Continuing without functional filesystem");
     }
     
     // Initialize display
@@ -560,6 +886,17 @@ void setup() {
     USBSerial.println("Initializing WiFi Manager...");
     WiFiManager::begin();
 
+    // Initialize version manager
+    Serial.println("=== Device Information ===");
+    Serial.println("Device: " + VersionManager::getDeviceName());
+    Serial.println("Manufacturer: " + VersionManager::getDeviceManufacturer());
+    Serial.println("Model: " + VersionManager::getDeviceModel());
+    Serial.println("Firmware Version: " + VersionManager::getVersionString());
+    Serial.println("Build Number: " + String(VersionManager::getBuildNumber()));
+    Serial.println("Build Date: " + VersionManager::getBuildDate());
+    Serial.println("Build Time: " + VersionManager::getBuildTime());
+    Serial.println("========================");
+    
     // Debug actions configuration
     debugActionsConfig();
     
@@ -591,6 +928,9 @@ void setup() {
     xTaskCreate(keyboardTask, "keyboard_task", 4096, NULL, 2, NULL);
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
 
+    // Initialize OTA Update Manager
+    OTAUpdateManager::begin();
+
     USBSerial.println("Setup complete - entering main loop");
 }
 
@@ -602,20 +942,47 @@ void loop() {
     updateLEDs();
     
     // Update display
-    static unsigned long lastDisplayUpdate = 0;
-    if (millis() - lastDisplayUpdate > 1000) { // Update display only once per second
-        updateDisplay();
-        lastDisplayUpdate = millis();
-    }
+    updateDisplay();
     
     // Update macro execution
     updateMacroHandler();
 
-    // Minimal loop - print a heartbeat every 5 seconds
+    // Update HID handler
+    updateHIDHandler();
+
+    // Run LittleFS diagnostics if enabled
+    if (diagnosticsEnabled) {
+        runDiagnostics();
+    }
+
+    // Check for updates every hour
+    static unsigned long lastUpdateCheck = 0;
+    if (millis() - lastUpdateCheck > 3600000) { // 1 hour
+        lastUpdateCheck = millis();
+        if (WiFiManager::isConnected()) {
+            OTAUpdateManager::checkForUpdates();
+        }
+    }
+
+    // Minimal loop - print a heartbeat every 10 seconds
     static unsigned long lastPrint = 0;
     if (millis() - lastPrint > 10000) {
         lastPrint = millis();
         USBSerial.println("Heartbeat...");
+        
+        // Enable this section if you need diagnostic information
+        /*
+        // Available variables for display
+        USBSerial.println("\n=== AVAILABLE VARIABLES FOR DISPLAY ====");
+        USBSerial.printf("current_mode: %s\n", currentMode.name.c_str());
+        USBSerial.printf("wifi_status: %s\n", WiFiManager::isConnected() ? "Connected" : "Disconnected");
+        USBSerial.printf("ip_address: %s\n", WiFiManager::getLocalIP().toString().c_str());
+        USBSerial.printf("layer: %s\n", keyHandler ? keyHandler->getCurrentLayer().c_str() : "default");
+        USBSerial.printf("macro_status: %s\n", (macroHandler && macroHandler->isExecuting()) ? "Running" : "Ready");
+        USBSerial.printf("SSID: %s\n", WiFiManager::getSSID().c_str());
+        USBSerial.printf("Is AP Mode: %s\n", WiFiManager::isAPMode() ? "Yes" : "No");
+        USBSerial.println("========================================\n");
+        */
         
         // // Optionally print diagnostics every 8 seconds
         // if (keyHandler) {
@@ -631,3 +998,4 @@ void loop() {
     // Give other tasks time to run
     delay(20); // Increased delay to reduce update frequency
 }
+

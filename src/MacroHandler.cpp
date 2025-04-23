@@ -1,7 +1,7 @@
 #include "MacroHandler.h"
 #include <Arduino.h>
 #include <FS.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 #include "HIDHandler.h"
 #include <USB.h>
@@ -21,22 +21,23 @@ MacroHandler::MacroHandler() {
 }
 
 bool MacroHandler::begin() {
-    if (!SPIFFS.begin(true)) {
-        USBSerial.println("Failed to initialize SPIFFS for macro storage");
-        return false;
+    // LittleFS should already be initialized in main.cpp
+    if (!LittleFS.exists("/macros")) {
+        USBSerial.println("Creating macros directory");
+        if (!LittleFS.mkdir("/macros")) {
+            USBSerial.println("Failed to create macros directory");
+            return false;
+        }
     }
-    
-    // Create the macro directory if it doesn't exist
-    ensureMacroDirectoryExists();
     
     // Load all existing macros
     return loadMacros();
 }
 
 void MacroHandler::ensureMacroDirectoryExists() {
-    if (!SPIFFS.exists("/macros")) {
+    if (!LittleFS.exists("/macros")) {
         USBSerial.println("Creating macros directory");
-        SPIFFS.mkdir("/macros");
+        LittleFS.mkdir("/macros");
     }
 }
 
@@ -49,7 +50,7 @@ bool MacroHandler::loadMacros() {
     ensureMacroDirectoryExists();
     
     // Scan the macros directory directly without using index.json
-    File root = SPIFFS.open("/macros");
+    File root = LittleFS.open("/macros");
     if (!root) {
         USBSerial.println("Failed to open macros directory");
         return false;
@@ -82,7 +83,7 @@ bool MacroHandler::loadMacros() {
         file.close();
         
         // Parse the macro JSON
-        DynamicJsonDocument doc(4096);
+        DynamicJsonDocument doc(8192);
         DeserializationError error = deserializeJson(doc, macroJson);
         
         if (error) {
@@ -118,7 +119,7 @@ bool MacroHandler::loadMacros() {
 
 bool MacroHandler::saveMacro(const Macro& macro) {
     // Convert to JSON
-    DynamicJsonDocument macroDoc(8192);
+    DynamicJsonDocument macroDoc(16384);
     
     // Fill in the JSON document
     macroDoc["id"] = macro.id;
@@ -261,7 +262,7 @@ bool MacroHandler::saveMacro(const Macro& macro) {
     
     // Save to file
     String macroPath = getMacroFilePath(macro.id);
-    File macroFile = SPIFFS.open(macroPath, FILE_WRITE);
+    File macroFile = LittleFS.open(macroPath, FILE_WRITE);
     if (!macroFile) {
         USBSerial.printf("Failed to open macro file for writing: %s\n", macroPath.c_str());
         return false;
@@ -573,17 +574,28 @@ bool MacroHandler::executeMacro(const String& macroId) {
     delayUntil = 0;
     
     USBSerial.printf("Starting execution of macro: %s\n", macroId.c_str());
+    USBSerial.printf("Macro contains %d commands\n", currentMacro.commands.size());
     return true;
 }
 
 void MacroHandler::executeCommand(const MacroCommand& cmd) {
+    USBSerial.printf("Executing command type: %d\n", cmd.type);
+    
     switch (cmd.type) {
         case MACRO_CMD_KEY_PRESS: {
             if (hidHandler) {
                 USBSerial.println("Executing key press command");
+                USBSerial.print("Report: ");
+                for (int i = 0; i < 8; i++) {
+                    USBSerial.printf("0x%02X ", cmd.data.keyPress.report[i]);
+                }
+                USBSerial.println();
+                
                 hidHandler->sendKeyboardReport(cmd.data.keyPress.report);
                 delay(50); // Small delay to ensure keypress is registered
                 hidHandler->sendEmptyKeyboardReport();
+            } else {
+                USBSerial.println("Error: HID handler not available");
             }
             break;
         }
@@ -591,7 +603,15 @@ void MacroHandler::executeCommand(const MacroCommand& cmd) {
         case MACRO_CMD_KEY_DOWN: {
             if (hidHandler) {
                 USBSerial.println("Executing key down command");
+                USBSerial.print("Report: ");
+                for (int i = 0; i < 8; i++) {
+                    USBSerial.printf("0x%02X ", cmd.data.keyPress.report[i]);
+                }
+                USBSerial.println();
+                
                 hidHandler->sendKeyboardReport(cmd.data.keyPress.report);
+            } else {
+                USBSerial.println("Error: HID handler not available");
             }
             break;
         }
@@ -600,6 +620,8 @@ void MacroHandler::executeCommand(const MacroCommand& cmd) {
             if (hidHandler) {
                 USBSerial.println("Executing key up command");
                 hidHandler->sendEmptyKeyboardReport();
+            } else {
+                USBSerial.println("Error: HID handler not available");
             }
             break;
         }
@@ -607,9 +629,17 @@ void MacroHandler::executeCommand(const MacroCommand& cmd) {
         case MACRO_CMD_CONSUMER_PRESS: {
             if (hidHandler) {
                 USBSerial.println("Executing consumer control command");
+                USBSerial.print("Report: ");
+                for (int i = 0; i < 4; i++) {
+                    USBSerial.printf("0x%02X ", cmd.data.consumerPress.report[i]);
+                }
+                USBSerial.println();
+                
                 hidHandler->sendConsumerReport(cmd.data.consumerPress.report);
                 delay(50); // Small delay to ensure press is registered
                 hidHandler->sendEmptyConsumerReport();
+            } else {
+                USBSerial.println("Error: HID handler not available");
             }
             break;
         }
@@ -623,34 +653,67 @@ void MacroHandler::executeCommand(const MacroCommand& cmd) {
         case MACRO_CMD_TYPE_TEXT: {
             if (cmd.data.typeText.text) {
                 USBSerial.printf("Typing text: %s\n", cmd.data.typeText.text);
+                USBSerial.printf("Text length: %d\n", cmd.data.typeText.length);
+                
                 // Type each character
                 const char* text = cmd.data.typeText.text;
                 for (size_t i = 0; i < cmd.data.typeText.length; i++) {
                     char c = text[i];
+                    USBSerial.printf("Processing character: '%c' (ASCII: %d)\n", c, (int)c);
+                    
                     // Convert character to keypress and send
                     uint8_t report[8] = {0};
                     
                     if (c >= 'a' && c <= 'z') {
                         report[2] = 4 + (c - 'a'); // USB HID code for a-z is 4-29
+                        USBSerial.printf("Lowercase letter, HID code: %d\n", report[2]);
                     } else if (c >= 'A' && c <= 'Z') {
                         report[0] = 0x02; // Left shift modifier
                         report[2] = 4 + (c - 'A'); // USB HID code for a-z is 4-29
+                        USBSerial.printf("Uppercase letter, HID code: %d with shift\n", report[2]);
                     } else if (c >= '1' && c <= '9') {
                         report[2] = 30 + (c - '1'); // USB HID code for 1-9 is 30-38
+                        USBSerial.printf("Number 1-9, HID code: %d\n", report[2]);
                     } else if (c == '0') {
                         report[2] = 39; // USB HID code for 0 is 39
+                        USBSerial.printf("Zero, HID code: %d\n", report[2]);
                     } else if (c == ' ') {
                         report[2] = 44; // USB HID code for space is 44
+                        USBSerial.printf("Space, HID code: %d\n", report[2]);
+                    } else if (c == ',') {
+                        report[0] = 0x02; // Left shift modifier
+                        report[2] = 54; // USB HID code for comma is 54
+                        USBSerial.printf("Comma, HID code: %d with shift\n", report[2]);
+                    } else if (c == '.') {
+                        report[2] = 55; // USB HID code for period is 55
+                        USBSerial.printf("Period, HID code: %d\n", report[2]);
+                    } else if (c == '!') {
+                        report[0] = 0x02; // Left shift modifier
+                        report[2] = 30; // USB HID code for 1 is 30
+                        USBSerial.printf("Exclamation mark, HID code: %d with shift\n", report[2]);
+                    } else {
+                        USBSerial.printf("Unsupported character: '%c'\n", c);
                     }
-                    // Add more character mappings as needed
                     
                     if (report[2] != 0 && hidHandler) {
+                        USBSerial.print("Sending report: ");
+                        for (int j = 0; j < 8; j++) {
+                            USBSerial.printf("0x%02X ", report[j]);
+                        }
+                        USBSerial.println();
+                        
                         hidHandler->sendKeyboardReport(report);
                         delay(10); // Small delay between keypresses
                         hidHandler->sendEmptyKeyboardReport();
                         delay(5);
+                    } else if (report[2] == 0) {
+                        USBSerial.println("No valid HID code for this character");
+                    } else {
+                        USBSerial.println("Error: HID handler not available");
                     }
                 }
+            } else {
+                USBSerial.println("Error: Text is null");
             }
             break;
         }
@@ -791,8 +854,8 @@ bool MacroHandler::deleteMacro(const String& macroId) {
     
     // Delete the file
     String macroPath = getMacroFilePath(macroId);
-    if (SPIFFS.exists(macroPath)) {
-        if (!SPIFFS.remove(macroPath)) {
+    if (LittleFS.exists(macroPath)) {
+        if (!LittleFS.remove(macroPath)) {
             USBSerial.printf("Failed to delete macro file: %s\n", macroPath.c_str());
             return false;
         }
@@ -827,6 +890,7 @@ void MacroHandler::update() {
             return; // Still waiting
         }
         // Delay completed
+        USBSerial.printf("Delay completed at %lu ms\n", currentTime);
         delayUntil = 0;
     }
     
@@ -839,12 +903,17 @@ void MacroHandler::update() {
     }
     
     // Execute the current command
+    USBSerial.printf("Executing command %d of %d\n", 
+                     currentCommandIndex + 1, 
+                     currentMacro.commands.size());
+    
     const MacroCommand& cmd = currentMacro.commands[currentCommandIndex];
     executeCommand(cmd);
     
     // If not in a delay, move to the next command
     if (delayUntil == 0) {
         currentCommandIndex++;
+        USBSerial.printf("Moving to next command: %d\n", currentCommandIndex);
     }
     
     lastExecTime = currentTime;
@@ -857,7 +926,7 @@ std::vector<String> MacroHandler::getAvailableMacros() {
     ensureMacroDirectoryExists();
     
     // Scan the directory directly
-    File root = SPIFFS.open("/macros");
+    File root = LittleFS.open("/macros");
     if (!root || !root.isDirectory()) {
         USBSerial.println("Failed to open macros directory in getAvailableMacros");
         return result;

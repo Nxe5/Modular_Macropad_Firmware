@@ -7,6 +7,7 @@
 #include <map>
 #include <vector>
 #include "ConfigManager.h"
+#include "HIDHandler.h"  // Include for key definitions
 
 // Constants
 #define MAX_KEYS 25 // Maximum number of keys
@@ -16,11 +17,13 @@
 
 // Action types for key events
 enum ActionType {
-    ACTION_NONE,
-    ACTION_HID,
-    ACTION_MULTIMEDIA,
-    ACTION_MACRO,
-    ACTION_LAYER
+    ACTION_NONE = 0,
+    ACTION_HID = 1,
+    ACTION_MULTIMEDIA = 2,
+    ACTION_MACRO = 3,
+    ACTION_LAYER = 4,
+    ACTION_CYCLE_LAYER = 5,
+    ACTION_MOUSE = 6  // Add mouse action type
 };
 
 enum KeyAction {
@@ -33,6 +36,7 @@ struct KeyConfig {
     ActionType type = ACTION_NONE;
     uint8_t hidReport[8] = {0};
     uint8_t consumerReport[4] = {0};
+    uint8_t mouseReport[5] = {0};  // 1 byte report ID + 4 bytes data
     String macroId = "";
     String targetLayer = "";
 };
@@ -52,11 +56,11 @@ public:
     // Add diagnostic methods
     void printKeyboardState();
     void diagnostics();
+    void printKeyConfig(uint8_t keyIndex);
     
     // Layer management
     bool switchToLayer(const String& layerName);
     String getCurrentLayer() const { return currentLayer; }
-    bool loadLayerConfiguration(const String& layerName, const std::map<String, ActionConfig>& actions);
     bool isLayerAvailable(const String& layerName) const;
     std::vector<String> getAvailableLayers() const;
     
@@ -77,6 +81,12 @@ public:
     
     // Add the displayKeyConfig method declaration
     void displayKeyConfig(const KeyConfig& config);
+
+    // Add method to cycle to next layer
+    bool cycleToNextLayer();
+    
+    // Add method to apply layer to the action map
+    void applyLayerToActionMap(const String& layerName);
     
 private:
     void cleanup();
@@ -92,8 +102,11 @@ private:
     // Layer management
     String currentLayer = "default";
     std::map<String, std::map<String, KeyConfig>> layerConfigs; // Layer -> ComponentID -> Config
-    void saveCurrentLayer();
+    bool saveCurrentLayer();
     bool loadCurrentLayer();
+    
+    // Add helper method to get next layer name
+    String getNextLayerName() const;
     
     // Direct position mapping
     struct ComponentPosition {
@@ -112,6 +125,9 @@ private:
     unsigned long* lastDebounceTime;
     KeyAction* lastAction;
     const unsigned long debounceDelay = 50;
+    
+    // Helper method to configure mouse actions
+    void configureMouseAction(const ActionConfig& actionConfig, KeyConfig& keyConfig, const String& componentId, const String& layerName = "");
 };
 
 extern KeyHandler* keyHandler;

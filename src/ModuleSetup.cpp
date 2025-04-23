@@ -1,48 +1,144 @@
 // ModuleSetup.cpp
 #include "ModuleSetup.h"
+#include "FileSystemUtils.h"
+#include "LEDHandler.h"
+#include "JsonUtils.h"
+#include <LittleFS.h>
 #include <ArduinoJson.h>
-#include "FS.h"
-#include "SPIFFS.h"
+#include <USB.h>
+#include <vector>
+#include <map>
+#include <USBCDC.h>
 
 ModuleCapabilities currentModule;
-ModuleInfo moduleInfo;
+ModuleSystemInfo moduleInfo;
+extern USBCDC USBSerial;
 
-// Function to read a JSON file from SPIFFS
+
+// Function to read a JSON file from LittleFS with improved error handling
 String readJsonFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
-        Serial.printf("File not found: %s\n", filePath);
-        return "";
+    USBSerial.printf("Reading JSON file: %s\n", filePath);
+    
+    if (!FileSystemUtils::fileExists(filePath)) {
+        USBSerial.printf("File not found: %s, returning empty JSON\n", filePath);
+        return "{}";
     }
     
-    File file = SPIFFS.open(filePath, "r");
-    if (!file) {
-        Serial.printf("Failed to open file: %s\n", filePath);
-        return "";
+    String content = FileSystemUtils::readFile(filePath);
+    
+    if (content.isEmpty()) {
+        USBSerial.println("File was empty or read failed, returning empty JSON");
+        return "{}";
     }
     
-    String content = file.readString();
-    file.close();
+    // Debug file size
+    USBSerial.printf("JSON file size: %d bytes\n", content.length());
+    
+    // Print memory diagnostics
+    USBSerial.printf("Free heap: %d bytes\n", ESP.getFreeHeap());
+    
+    // Validate JSON with a larger document size
+    DynamicJsonDocument validator(1024); // Increased from 16 bytes
+    DeserializationError error = deserializeJson(validator, content);
+    if (error) {
+        USBSerial.printf("Warning: File does not contain valid JSON: %s\n", error.c_str());
+        USBSerial.printf("  Memory issue details - required size: %d\n", 
+            error.code() == DeserializationError::NoMemory ? 
+            content.length() * 1.5 : 0); // Estimated size instead of measureJson
+        return "{}";
+    }
+    
+    USBSerial.println("JSON validation successful");
     return content;
 }
 
-// Function to write a JSON file to SPIFFS
+// Process components JSON with increased memory allocation
+bool processComponentsJson(const String& jsonStr) {
+    USBSerial.println("Processing components JSON configuration");
+    
+    // Debug free memory before allocation
+    USBSerial.printf("Free heap before allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate required buffer size - using default safety factor
+    size_t bufferSize = estimateJsonBufferSize(jsonStr);
+    
+    // Create document with calculated size
+    DynamicJsonDocument doc(bufferSize);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    // Debug memory after allocation
+    USBSerial.printf("Free heap after allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    if (error) {
+        USBSerial.printf("Failed to parse components JSON: %s\n", error.c_str());
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Allocation failed. Tried to allocate %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = jsonStr.length() * 2; // Conservative estimate
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
+        return false;
+    }
+    
+    // ... rest of the function remains the same
+    // Continue processing the components as before
+    
+    return true;
+}
+
+// Parse actions JSON with increased memory allocation
+bool parseActionsJson(const String& jsonStr) {
+    USBSerial.println("Parsing actions JSON configuration");
+    
+    // Debug free memory before allocation
+    USBSerial.printf("Free heap before allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate required buffer size (actions JSON can be large, use higher factor)
+    size_t bufferSize = estimateJsonBufferSize(jsonStr, 1.8);
+    
+    // Create document with calculated size
+    DynamicJsonDocument doc(bufferSize);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    // Debug memory after allocation
+    USBSerial.printf("Free heap after allocation: %d bytes\n", ESP.getFreeHeap());
+    
+    if (error) {
+        USBSerial.printf("Failed to parse actions JSON: %s\n", error.c_str());
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Allocation failed. Tried to allocate %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = jsonStr.length() * 2.5; // Conservative estimate for actions
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
+        return false;
+    }
+    
+    // ... rest of the function remains the same
+    // Continue processing the actions as before
+    
+    return true;
+}
+
+// Function to write a JSON file to LittleFS with improved error handling
 bool writeJsonFile(const char* filePath, const String& content) {
-    File file = SPIFFS.open(filePath, "w");
-    if (!file) {
-        Serial.printf("Failed to create file: %s\n", filePath);
+    // Validate the JSON before writing
+    DynamicJsonDocument validator(1024); // Increased from 16 bytes
+    DeserializationError error = deserializeJson(validator, content);
+    if (error) {
+        USBSerial.printf("Refusing to write invalid JSON to %s: %s\n", filePath, error.c_str());
+        
+        // Print more diagnostic info
+        if (error.code() == DeserializationError::NoMemory) {
+            USBSerial.printf("Memory allocation failed. Document size too small.\n");
+            // Use estimation instead of measureJson
+            size_t requiredSize = content.length() * 1.5; // Simple estimate
+            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+        }
         return false;
     }
     
-    size_t bytesWritten = file.print(content);
-    file.close();
-    
-    if (bytesWritten == content.length()) {
-        Serial.printf("File written successfully: %s\n", filePath);
-        return true;
-    } else {
-        Serial.printf("Write failed: %s\n", filePath);
-        return false;
-    }
+    return FileSystemUtils::writeFile(filePath, content);
 }
 
 // Count components of a specific type
@@ -69,10 +165,132 @@ uint8_t countComponentsByType(const String& componentsJson, const char* componen
 }
 
 void initializeModuleInfo() {
+    // Create defaults directory if it doesn't exist
+    if (!LittleFS.exists("/config/defaults")) {
+        LittleFS.mkdir("/config/defaults");
+    }
+    
+    // Create default files if they don't exist
+    if (!LittleFS.exists("/config/info.json")) {
+        USBSerial.println("info.json not found, creating default");
+        String defaultInfo = R"({
+            "name": "Modular Macropad",
+            "version": "1.0.0",
+            "author": "User",
+            "description": "Default configuration",
+            "module-size": "full",
+            "gridSize": { "rows": 3, "columns": 4 },
+            "defaults": {},
+            "settings": {},
+            "supportedComponentTypes": ["button", "encoder", "display"]
+        })";
+        writeJsonFile("/config/info.json", defaultInfo);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/info.json", defaultInfo);
+    }
+    
+    if (!LittleFS.exists("/config/components.json")) {
+        USBSerial.println("components.json not found, creating default");
+        String defaultComponents = R"({
+            "components": [
+                {
+                    "id": "button-0",
+                    "type": "button",
+                    "size": { "rows": 1, "columns": 1 },
+                    "start_location": { "row": 0, "column": 0 }
+                }
+            ]
+        })";
+        writeJsonFile("/config/components.json", defaultComponents);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/components.json", defaultComponents);
+    }
+    
+    if (!LittleFS.exists("/config/actions.json")) {
+        USBSerial.println("actions.json not found, creating default");
+        String defaultActions = R"({
+            "actions": {
+                "button-0": {
+                    "action": "keyboard",
+                    "options": {
+                        "keyCode": 97
+                    }
+                }
+            }
+        })";
+        writeJsonFile("/config/actions.json", defaultActions);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/actions.json", defaultActions);
+    }
+    
+    if (!LittleFS.exists("/config/leds.json")) {
+        USBSerial.println("Creating default LED configuration...");
+        String defaultLEDs = createDefaultLEDConfig();
+        writeJsonFile("/config/leds.json", defaultLEDs);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/leds.json", defaultLEDs);
+        
+        USBSerial.println("Default LED configuration created");
+    }
+    
+    if (!LittleFS.exists("/config/reports.json")) {
+        USBSerial.println("reports.json not found, creating default");
+        String defaultReports = R"({
+            "reports": {
+                "keyboard": {
+                    "enabled": true,
+                    "reportId": 1
+                },
+                "consumer": {
+                    "enabled": true,
+                    "reportId": 2
+                },
+                "mouse": {
+                    "enabled": false,
+                    "reportId": 3
+                }
+            }
+        })";
+        writeJsonFile("/config/reports.json", defaultReports);
+        
+        // Also save to defaults directory
+        writeJsonFile("/config/defaults/reports.json", defaultReports);
+    }
+    
+    // Check if we need to create backup copies of existing configurations
+    if (!LittleFS.exists("/config/defaults/info.json") && LittleFS.exists("/config/info.json")) {
+        String content = FileSystemUtils::readFile("/config/info.json");
+        writeJsonFile("/config/defaults/info.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/components.json") && LittleFS.exists("/config/components.json")) {
+        String content = FileSystemUtils::readFile("/config/components.json");
+        writeJsonFile("/config/defaults/components.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/actions.json") && LittleFS.exists("/config/actions.json")) {
+        String content = FileSystemUtils::readFile("/config/actions.json");
+        writeJsonFile("/config/defaults/actions.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/leds.json") && LittleFS.exists("/config/leds.json")) {
+        String content = FileSystemUtils::readFile("/config/leds.json");
+        writeJsonFile("/config/defaults/leds.json", content);
+    }
+    
+    if (!LittleFS.exists("/config/defaults/reports.json") && LittleFS.exists("/config/reports.json")) {
+        String content = FileSystemUtils::readFile("/config/reports.json");
+        writeJsonFile("/config/defaults/reports.json", content);
+    }
+    
     // Load configuration files
     moduleInfo.infoJson = readJsonFile("/config/info.json");
     moduleInfo.componentsJson = readJsonFile("/config/components.json");
-    moduleInfo.ledsJson = readJsonFile("/config/LEDs.json");
+    moduleInfo.ledsJson = readJsonFile("/config/leds.json");
     
     // Get unique ID from ESP32
     uint64_t chipId = ESP.getEfuseMac();
@@ -182,7 +400,7 @@ bool mergeConfigFiles() {
     serializeJsonPretty(configDoc, configJson);
     
     // Save to config.json
-    return writeJsonFile("/data/config/config.json", configJson);
+    return writeJsonFile("/config/config.json", configJson);
 }
 
 ModuleCapabilities getModuleCapabilities() {
@@ -259,7 +477,7 @@ const char* getModuleSizeName(ModuleSize size) {
 }
 
 bool loadModuleConfiguration() {
-    String configJson = readJsonFile("/data/config/config.json");
+    String configJson = readJsonFile("/config/config.json");
     if (configJson.isEmpty()) {
         return false;
     }

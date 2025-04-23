@@ -1,18 +1,22 @@
 #include "ConfigManager.h"
+#include "ModuleSetup.h" // For the readJsonFile function
+#include "FileSystemUtils.h"
+#include <Arduino.h> // For ESP.getFreeHeap()
+#include <ArduinoJson.h>
+#include <LittleFS.h>
+#include <USBCDC.h>
+#include "JsonUtils.h" // Include centralized JSON utilities
+
+// Global references
+extern USBCDC USBSerial;
+
+// Forward declarations
+extern void createWorkingActionsFile();
+// Function is now declared in JsonUtils.h
+// extern size_t estimateJsonBufferSize(const String& filesize, float multiplier);
 
 String ConfigManager::readFile(const char* filePath) {
-    if (!SPIFFS.exists(filePath)) {
-        Serial.printf("File not found: %s\n", filePath);
-        return "";
-    }
-    File file = SPIFFS.open(filePath, "r");
-    if (!file) {
-        Serial.printf("Failed to open file: %s\n", filePath);
-        return "";
-    }
-    String content = file.readString();
-    file.close();
-    return content;
+    return FileSystemUtils::readFile(filePath);
 }
 
 std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
@@ -20,10 +24,50 @@ std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
     String jsonStr = readFile(filePath);
     if (jsonStr.isEmpty()) return components;
     
-    DynamicJsonDocument doc(8192);
+    // Print debug info
+    Serial.printf("Components JSON size: %d bytes\n", jsonStr.length());
+    Serial.printf("Free heap before parsing: %d bytes\n", ESP.getFreeHeap());
+    
+    // Estimate buffer size based on JSON content with a 1.5 multiplier
+    size_t bufferSize = estimateJsonBufferSize(jsonStr);
+    
+    DynamicJsonDocument doc(bufferSize);
     DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    Serial.printf("Free heap after parsing: %d bytes\n", ESP.getFreeHeap());
+    
     if (error) {
         Serial.printf("Error parsing %s: %s\n", filePath, error.c_str());
+        if (error.code() == DeserializationError::NoMemory) {
+            Serial.printf("Memory allocation failed. Tried buffer size: %u bytes\n", bufferSize);
+            // Use estimation instead of measureJson
+            size_t requiredSize = jsonStr.length() * 2; // Simple estimation
+            Serial.printf("Estimated required size: %u bytes\n", requiredSize);
+            
+            // If we can estimate and allocate the required size, retry
+            if (requiredSize > 0 && requiredSize <= ESP.getFreeHeap() / 2) {
+                Serial.printf("Retrying with estimated size: %u bytes\n", requiredSize);
+                DynamicJsonDocument retryDoc(requiredSize);
+                error = deserializeJson(retryDoc, jsonStr);
+                if (!error) {
+                    // Process with the retry document
+                    JsonArray comps = retryDoc["components"].as<JsonArray>();
+                    for (JsonObject comp : comps) {
+                        Component c;
+                        c.id = comp["id"].as<String>();
+                        c.type = comp["type"].as<String>();
+                        c.rows = comp["size"]["rows"];
+                        c.cols = comp["size"]["columns"];
+                        c.startRow = comp["start_location"]["row"];
+                        c.startCol = comp["start_location"]["column"];
+                        if (c.type == "encoder" && comp.containsKey("with_button"))
+                            c.withButton = comp["with_button"];
+                        components.push_back(c);
+                    }
+                    return components;
+                }
+            }
+        }
         return components;
     }
     
@@ -43,185 +87,666 @@ std::vector<Component> ConfigManager::loadComponents(const char* filePath) {
     return components;
 }
 
-std::map<String, ActionConfig> ConfigManager::loadActions(const String &filePath) {
+std::map<String, ActionConfig> ConfigManager::loadActions(const char* filePath) {
     std::map<String, ActionConfig> actions;
     
-    // Use the readJsonFile function from ModuleSetup.cpp
-    String jsonContent = readJsonFile(filePath.c_str());
-    if (jsonContent.isEmpty()) {
-        Serial.printf("Could not read file: %s\n", filePath.c_str());
-        return actions;
+    USBSerial.printf("Loading actions from: %s\n", filePath);
+    
+    // Try to read the file
+    File file = LittleFS.open(filePath, "r");
+    if (!file) {
+        USBSerial.printf("Failed to open actions file: %s\n", filePath);
+        
+        // Try alternative location if primary fails
+        const char* altPath = (strncmp(filePath, "/config/", 8) == 0) ? 
+            "/data/config/actions.json" : "/config/actions.json";
+            
+        USBSerial.printf("Trying alternative path: %s\n", altPath);
+        file = LittleFS.open(altPath, "r");
+        
+        if (!file) {
+            USBSerial.printf("Failed to open alternative actions file: %s\n", altPath);
+            
+            // Last resort - create a default file
+            USBSerial.println("Creating default actions file as last resort");
+            createWorkingActionsFile();
+            
+            // Try one more time with the primary path
+            file = LittleFS.open(filePath, "r");
+            if (!file) {
+                USBSerial.println("Still cannot open actions file after creating default");
+                return actions;
+            }
+        }
     }
     
+    if (file.size() > 0) {
+        // First try with ArduinoJson library's advanced features
+        size_t fileSize = file.size();
+        USBSerial.printf("File size: %d bytes\n", fileSize);
+        
+        // Calculate buffer size with safety margin - use a much larger multiplier for safety
+        size_t bufferSize = 16384; // Start with a 16KB buffer
+        if (fileSize > 3000) {
+            bufferSize = 32768; // Use 32KB for larger files
+        }
+        
+        USBSerial.printf("Allocating JSON buffer of %d bytes (free heap: %d)\n", 
+                     bufferSize, ESP.getFreeHeap());
+        
+        DynamicJsonDocument fullDoc(bufferSize);
+        
+        DeserializationError error = deserializeJson(fullDoc, file);
+        
+        if (error) {
+            USBSerial.printf("Failed to parse actions.json with error: %s\n", error.c_str());
+            
+            // Try a simpler memory-efficient approach
+            file.seek(0); // Reset file position
+            String jsonString = file.readString();
+            file.close();
+            
+            USBSerial.println("Calling createWorkingActionsFile to recover from parse error");
+            createWorkingActionsFile();
+            
+            // Try to load the newly created file
+            return loadActions(filePath);
+        } else {
+            USBSerial.println("Successfully parsed actions.json");
+            
+            // Extract default layer configuration
+            if (fullDoc.containsKey("actions")) {
+                JsonObject actionsObj = fullDoc["actions"];
+                
+                String defaultLayerName = "default-actions-layer";
+                
+                // Check if a layer name is explicitly provided
+                if (actionsObj.containsKey("layer-name")) {
+                    defaultLayerName = actionsObj["layer-name"].as<String>();
+                    USBSerial.printf("Default layer name: %s\n", defaultLayerName.c_str());
+                    
+                    // Add the layer name as a special action entry so KeyHandler knows it
+                    ActionConfig layerNameConfig;
+                    layerNameConfig.type = "default-layer-name";
+                    layerNameConfig.targetLayer = defaultLayerName;
+                    actions["__default_layer_name__"] = layerNameConfig;
+                }
+                
+                // Extract the layer-config for the default layer
+                if (actionsObj.containsKey("layer-config")) {
+                    JsonObject layerConfig = actionsObj["layer-config"];
+                    USBSerial.printf("Found %d components in default layer\n", layerConfig.size());
+                    
+                    // Process each component in this layer
+                    for (JsonPair kv : layerConfig) {
+                        String componentId = kv.key().c_str();
+                        JsonObject config = kv.value().as<JsonObject>();
+                        
+                        ActionConfig actionConfig;
+                        actionConfig.id = componentId;
+                        
+                        if (config.containsKey("type")) {
+                            actionConfig.type = config["type"].as<String>();
+                            USBSerial.printf("Component %s has type: %s\n", 
+                                         componentId.c_str(), actionConfig.type.c_str());
+                            
+                            // Parse standard report field if it exists
+                            if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                JsonArray reportArray = config["report"].as<JsonArray>();
+                                for (JsonVariant code : reportArray) {
+                                    actionConfig.report.push_back(code.as<String>());
+                                }
+                                USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                            }
+                            
+                            // Load encoder-specific fields
+                            if (config.containsKey("clockwise")) {
+                                if (config["clockwise"].is<JsonArray>()) {
+                                    // Legacy format - array of strings
+                                    JsonArray codes = config["clockwise"].as<JsonArray>();
+                                    for (JsonVariant code : codes) {
+                                        actionConfig.clockwise.push_back(code.as<String>());
+                                    }
+                                    USBSerial.printf("  Added %d clockwise codes (legacy format)\n", actionConfig.clockwise.size());
+                                } 
+                                else if (config["clockwise"].is<JsonObject>()) {
+                                    // New format - object with type and report fields
+                                    JsonObject cwObj = config["clockwise"].as<JsonObject>();
+                                    if (cwObj.containsKey("type") && cwObj.containsKey("report")) {
+                                        actionConfig.clockwiseAction.type = cwObj["type"].as<String>();
+                                        JsonArray reportArray = cwObj["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.clockwiseAction.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added clockwise action with type %s and %d codes (new format)\n", 
+                                            actionConfig.clockwiseAction.type.c_str(), 
+                                            actionConfig.clockwiseAction.report.size());
+                                    }
+                                }
+                            }
+                            
+                            if (config.containsKey("counterclockwise")) {
+                                if (config["counterclockwise"].is<JsonArray>()) {
+                                    // Legacy format - array of strings
+                                    JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                    for (JsonVariant code : codes) {
+                                        actionConfig.counterclockwise.push_back(code.as<String>());
+                                    }
+                                    USBSerial.printf("  Added %d counterclockwise codes (legacy format)\n", actionConfig.counterclockwise.size());
+                                }
+                                else if (config["counterclockwise"].is<JsonObject>()) {
+                                    // New format - object with type and report fields
+                                    JsonObject ccwObj = config["counterclockwise"].as<JsonObject>();
+                                    if (ccwObj.containsKey("type") && ccwObj.containsKey("report")) {
+                                        actionConfig.counterclockwiseAction.type = ccwObj["type"].as<String>();
+                                        JsonArray reportArray = ccwObj["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.counterclockwiseAction.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added counterclockwise action with type %s and %d codes (new format)\n", 
+                                            actionConfig.counterclockwiseAction.type.c_str(), 
+                                            actionConfig.counterclockwiseAction.report.size());
+                                    }
+                                }
+                            }
+                            
+                            if (config.containsKey("buttonPress")) {
+                                if (config["buttonPress"].is<JsonArray>()) {
+                                    // Legacy format - array of strings
+                                    JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                    for (JsonVariant code : codes) {
+                                        actionConfig.hidReport.push_back(code.as<String>());
+                                        actionConfig.buttonPress.push_back(code.as<String>()); // Also add to the new buttonPress field
+                                    }
+                                    USBSerial.printf("  Added %d button press codes (legacy format)\n", actionConfig.hidReport.size());
+                                }
+                                else if (config["buttonPress"].is<JsonObject>()) {
+                                    // New format - object with type and report fields
+                                    JsonObject bpObj = config["buttonPress"].as<JsonObject>();
+                                    if (bpObj.containsKey("type") && bpObj.containsKey("report")) {
+                                        actionConfig.buttonPressAction.type = bpObj["type"].as<String>();
+                                        JsonArray reportArray = bpObj["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.buttonPressAction.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added button press action with type %s and %d codes (new format)\n", 
+                                            actionConfig.buttonPressAction.type.c_str(), 
+                                            actionConfig.buttonPressAction.report.size());
+                                    }
+                                }
+                            }
+                            
+                            if (config.containsKey("macroId")) {
+                                actionConfig.macroId = config["macroId"].as<String>();
+                                USBSerial.printf("  Macro ID: %s\n", actionConfig.macroId.c_str());
+                            }
+                            
+                            if (config.containsKey("targetLayer")) {
+                                actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                USBSerial.printf("  Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                            }
+                            
+                            // Add configuration directly to map for the default layer
+                            actions[componentId] = actionConfig;
+                        }
+                    }
+                }
+                
+                // Check for additional layers
+                if (fullDoc.containsKey("layers")) {
+                    JsonObject layers = fullDoc["layers"];
+                    USBSerial.printf("Found %d additional layers\n", layers.size());
+                    
+                    // Process each additional layer
+                    for (JsonPair layerKv : layers) {
+                        String layerName = layerKv.key().c_str();
+                        JsonObject layerConfig = layerKv.value().as<JsonObject>();
+                        
+                        USBSerial.printf("Processing layer: %s\n", layerName.c_str());
+                        
+                        if (layerConfig.containsKey("layer-config")) {
+                            JsonObject buttonConfigs = layerConfig["layer-config"];
+                            
+                            // Process each button in this layer
+                            for (JsonPair buttonKv : buttonConfigs) {
+                                String componentId = buttonKv.key().c_str();
+                                JsonObject config = buttonKv.value().as<JsonObject>();
+                                
+                                ActionConfig actionConfig;
+                                actionConfig.id = componentId;
+                                
+                                if (config.containsKey("type")) {
+                                    actionConfig.type = config["type"].as<String>();
+                                    USBSerial.printf("  Component %s has type: %s\n", 
+                                                 componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    // Parse standard report field if it exists
+                                    if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                        JsonArray reportArray = config["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                                    }
+                                    
+                                    // Load encoder-specific fields
+                                    if (config.containsKey("clockwise")) {
+                                        if (config["clockwise"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["clockwise"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.clockwise.push_back(code.as<String>());
+                                            }
+                                            USBSerial.printf("  Added %d clockwise codes (legacy format)\n", actionConfig.clockwise.size());
+                                        } 
+                                        else if (config["clockwise"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject cwObj = config["clockwise"].as<JsonObject>();
+                                            if (cwObj.containsKey("type") && cwObj.containsKey("report")) {
+                                                actionConfig.clockwiseAction.type = cwObj["type"].as<String>();
+                                                JsonArray reportArray = cwObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.clockwiseAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added clockwise action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.clockwiseAction.type.c_str(), 
+                                                    actionConfig.clockwiseAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("counterclockwise")) {
+                                        if (config["counterclockwise"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.counterclockwise.push_back(code.as<String>());
+                                            }
+                                            USBSerial.printf("  Added %d counterclockwise codes (legacy format)\n", actionConfig.counterclockwise.size());
+                                        }
+                                        else if (config["counterclockwise"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject ccwObj = config["counterclockwise"].as<JsonObject>();
+                                            if (ccwObj.containsKey("type") && ccwObj.containsKey("report")) {
+                                                actionConfig.counterclockwiseAction.type = ccwObj["type"].as<String>();
+                                                JsonArray reportArray = ccwObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.counterclockwiseAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added counterclockwise action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.counterclockwiseAction.type.c_str(), 
+                                                    actionConfig.counterclockwiseAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("buttonPress")) {
+                                        if (config["buttonPress"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.hidReport.push_back(code.as<String>());
+                                                actionConfig.buttonPress.push_back(code.as<String>()); // Also add to the new buttonPress field
+                                            }
+                                            USBSerial.printf("  Added %d button press codes (legacy format)\n", actionConfig.hidReport.size());
+                                        }
+                                        else if (config["buttonPress"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject bpObj = config["buttonPress"].as<JsonObject>();
+                                            if (bpObj.containsKey("type") && bpObj.containsKey("report")) {
+                                                actionConfig.buttonPressAction.type = bpObj["type"].as<String>();
+                                                JsonArray reportArray = bpObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.buttonPressAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added button press action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.buttonPressAction.type.c_str(), 
+                                                    actionConfig.buttonPressAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("macroId")) {
+                                        actionConfig.macroId = config["macroId"].as<String>();
+                                        USBSerial.printf("    Macro ID: %s\n", actionConfig.macroId.c_str());
+                                    }
+                                    
+                                    if (config.containsKey("targetLayer")) {
+                                        actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                        USBSerial.printf("    Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                                    }
+                                    
+                                    // Add configuration to map with layer prefix
+                                    String layerComponentId = layerName + ":" + componentId;
+                                    actions[layerComponentId] = actionConfig;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Check for the new format with array of layers
+                if (fullDoc["actions"].containsKey("layers") && fullDoc["actions"]["layers"].is<JsonArray>()) {
+                    JsonArray layersArray = fullDoc["actions"]["layers"].as<JsonArray>();
+                    USBSerial.printf("Found %d layers in the new format\n", layersArray.size());
+                    
+                    // Process each layer in the array
+                    for (JsonObject layerObj : layersArray) {
+                        if (layerObj.containsKey("layer-name") && layerObj.containsKey("layer-config")) {
+                            String layerName = layerObj["layer-name"].as<String>();
+                            JsonObject layerConfig = layerObj["layer-config"].as<JsonObject>();
+                            
+                            USBSerial.printf("Processing layer from array: %s\n", layerName.c_str());
+                            
+                            // Process each button in this layer
+                            for (JsonPair buttonKv : layerConfig) {
+                                String componentId = buttonKv.key().c_str();
+                                JsonObject config = buttonKv.value().as<JsonObject>();
+                                
+                                ActionConfig actionConfig;
+                                actionConfig.id = componentId;
+                                
+                                if (config.containsKey("type")) {
+                                    actionConfig.type = config["type"].as<String>();
+                                    USBSerial.printf("  Component %s has type: %s\n", 
+                                                 componentId.c_str(), actionConfig.type.c_str());
+                                    
+                                    // Parse standard report field if it exists
+                                    if (config.containsKey("report") && config["report"].is<JsonArray>()) {
+                                        JsonArray reportArray = config["report"].as<JsonArray>();
+                                        for (JsonVariant code : reportArray) {
+                                            actionConfig.report.push_back(code.as<String>());
+                                        }
+                                        USBSerial.printf("  Added %d codes from standard report field\n", actionConfig.report.size());
+                                    }
+                                    
+                                    // Load encoder-specific fields
+                                    if (config.containsKey("clockwise")) {
+                                        if (config["clockwise"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["clockwise"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.clockwise.push_back(code.as<String>());
+                                            }
+                                            USBSerial.printf("  Added %d clockwise codes (legacy format)\n", actionConfig.clockwise.size());
+                                        } 
+                                        else if (config["clockwise"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject cwObj = config["clockwise"].as<JsonObject>();
+                                            if (cwObj.containsKey("type") && cwObj.containsKey("report")) {
+                                                actionConfig.clockwiseAction.type = cwObj["type"].as<String>();
+                                                JsonArray reportArray = cwObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.clockwiseAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added clockwise action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.clockwiseAction.type.c_str(), 
+                                                    actionConfig.clockwiseAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("counterclockwise")) {
+                                        if (config["counterclockwise"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["counterclockwise"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.counterclockwise.push_back(code.as<String>());
+                                            }
+                                            USBSerial.printf("  Added %d counterclockwise codes (legacy format)\n", actionConfig.counterclockwise.size());
+                                        }
+                                        else if (config["counterclockwise"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject ccwObj = config["counterclockwise"].as<JsonObject>();
+                                            if (ccwObj.containsKey("type") && ccwObj.containsKey("report")) {
+                                                actionConfig.counterclockwiseAction.type = ccwObj["type"].as<String>();
+                                                JsonArray reportArray = ccwObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.counterclockwiseAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added counterclockwise action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.counterclockwiseAction.type.c_str(), 
+                                                    actionConfig.counterclockwiseAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("buttonPress")) {
+                                        if (config["buttonPress"].is<JsonArray>()) {
+                                            // Legacy format - array of strings
+                                            JsonArray codes = config["buttonPress"].as<JsonArray>();
+                                            for (JsonVariant code : codes) {
+                                                actionConfig.hidReport.push_back(code.as<String>());
+                                                actionConfig.buttonPress.push_back(code.as<String>()); // Also add to the new buttonPress field
+                                            }
+                                            USBSerial.printf("  Added %d button press codes (legacy format)\n", actionConfig.hidReport.size());
+                                        }
+                                        else if (config["buttonPress"].is<JsonObject>()) {
+                                            // New format - object with type and report fields
+                                            JsonObject bpObj = config["buttonPress"].as<JsonObject>();
+                                            if (bpObj.containsKey("type") && bpObj.containsKey("report")) {
+                                                actionConfig.buttonPressAction.type = bpObj["type"].as<String>();
+                                                JsonArray reportArray = bpObj["report"].as<JsonArray>();
+                                                for (JsonVariant code : reportArray) {
+                                                    actionConfig.buttonPressAction.report.push_back(code.as<String>());
+                                                }
+                                                USBSerial.printf("  Added button press action with type %s and %d codes (new format)\n", 
+                                                    actionConfig.buttonPressAction.type.c_str(), 
+                                                    actionConfig.buttonPressAction.report.size());
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (config.containsKey("macroId")) {
+                                        actionConfig.macroId = config["macroId"].as<String>();
+                                        USBSerial.printf("    Macro ID: %s\n", actionConfig.macroId.c_str());
+                                    }
+                                    
+                                    if (config.containsKey("targetLayer")) {
+                                        actionConfig.targetLayer = config["targetLayer"].as<String>();
+                                        USBSerial.printf("    Target Layer: %s\n", actionConfig.targetLayer.c_str());
+                                    }
+                                    
+                                    // If this is the first layer and no explicit default was set, use it as default
+                                    if (layerObj == layersArray[0] && !actions.count("__default_layer_name__")) {
+                                        ActionConfig layerNameConfig;
+                                        layerNameConfig.type = "default-layer-name";
+                                        layerNameConfig.targetLayer = layerName;
+                                        actions["__default_layer_name__"] = layerNameConfig;
+                                        USBSerial.printf("Using first layer in array as default: %s\n", layerName.c_str());
+                                    }
+                                    
+                                    // Add configuration to map with layer prefix
+                                    String layerComponentId = layerName + ":" + componentId;
+                                    actions[layerComponentId] = actionConfig;
+                                    
+                                    // If this is the first layer (default) also add without prefix for backward compatibility
+                                    if (layerObj == layersArray[0]) {
+                                        actions[componentId] = actionConfig;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            USBSerial.printf("Successfully extracted %d action configurations\n", actions.size());
+            return actions;
+        }
+    } else {
+        USBSerial.println("Actions file is empty");
+        file.close();
+        
+        // Create default actions
+        createWorkingActionsFile();
+        return loadActions(filePath);
+    }
+
+    file.close();
+    return actions;
+}
+
+bool ConfigManager::parseComponent(JsonObjectConst obj, Component& component) {
+    if (!obj.containsKey("id") || !obj.containsKey("type")) {
+        return false;
+    }
     
-    // Parse JSON
-    DynamicJsonDocument doc(16384); // Increased size to handle larger files
-    DeserializationError error = deserializeJson(doc, jsonContent);
+    component.id = obj["id"].as<String>();
+    component.type = obj["type"].as<String>();
+    
+    if (obj.containsKey("size") && obj["size"].is<JsonObjectConst>()) {
+        JsonObjectConst size = obj["size"];
+        component.rows = size["rows"] | 1;
+        component.cols = size["columns"] | 1;
+    } else {
+        component.rows = 1;
+        component.cols = 1;
+    }
+    
+    if (obj.containsKey("start_location") && obj["start_location"].is<JsonObjectConst>()) {
+        JsonObjectConst location = obj["start_location"];
+        component.startRow = location["row"] | 0;
+        component.startCol = location["column"] | 0;
+    } else {
+        component.startRow = 0;
+        component.startCol = 0;
+    }
+    
+    if (component.type == "encoder" && obj.containsKey("with_button")) {
+        component.withButton = obj["with_button"] | false;
+    } else {
+        component.withButton = false;
+    }
+    
+    return true;
+}
+
+std::map<String, DisplayMode> ConfigManager::loadDisplayModes(const char* filePath) {
+    std::map<String, DisplayMode> displayModes;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return displayModes;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(8192);  // Allocate a large buffer
+    DeserializationError error = deserializeJson(doc, jsonStr);
     
     if (error) {
-        Serial.printf("Error parsing JSON: %s\n", error.c_str());
-        return actions;
+        USBSerial.printf("Error parsing display modes JSON: %s\n", error.c_str());
+        return displayModes;
     }
     
-    // Extract layer config
-    if (!doc.containsKey("actions") || 
-        !doc["actions"].containsKey("layer-config")) {
-        Serial.println("Invalid actions.json format: missing actions or layer-config");
-        return actions;
+    // Check if "modes" key exists
+    if (!doc.containsKey("modes")) {
+        USBSerial.println("No 'modes' section found in display config");
+        return displayModes;
     }
     
-    JsonObject layerConfig = doc["actions"]["layer-config"];
-    
-    // Process each button configuration
-    for (JsonPair kv : layerConfig) {
-        String buttonId = kv.key().c_str();
-        JsonObject buttonConfig = kv.value();
+    // Process each mode
+    JsonObject modes = doc["modes"];
+    for (JsonPair pair : modes) {
+        String modeName = pair.key().c_str();
+        JsonObject modeConfig = pair.value();
         
-        ActionConfig action;
-        action.type = buttonConfig["type"].as<String>();
+        DisplayMode mode;
+        mode.name = modeName;
+        mode.active = modeConfig["active"] | false;
+        mode.template_file = modeConfig["template_file"] | "";
+        mode.description = modeConfig["description"] | "";
+        mode.refresh_rate = modeConfig["refresh_rate"] | 1000;  // Default to 1 second
+        mode.backgroundImage = modeConfig["backgroundImage"] | "";  // New field for background image
         
-        // Debug
-        Serial.printf("Loading action for %s, type: %s\n", buttonId.c_str(), action.type.c_str());
-        
-        if (action.type == "hid") {
-            // Check if buttonPress exists
-            if (buttonConfig.containsKey("buttonPress")) {
-                JsonVariant buttonPress = buttonConfig["buttonPress"];
-                
-                // Handle both array formats
-                if (buttonPress.is<JsonArray>()) {
-                    JsonArray pressArray = buttonPress.as<JsonArray>();
-                    
-                    // Check if we have a nested array format [["0x00", "0x01", ...]]
-                    if (pressArray.size() > 0 && pressArray[0].is<JsonArray>()) {
-                        // Handle nested array format
-                        JsonArray innerArray = pressArray[0].as<JsonArray>();
-                        
-                        action.hidReport.clear();
-                        for (size_t i = 0; i < innerArray.size() && i < 8; i++) {
-                            action.hidReport.push_back(innerArray[i].as<String>());
-                        }
-                    } 
-                    else {
-                        // Handle flat array format ["0x00", "0x01", ...]
-                        action.hidReport.clear();
-                        for (size_t i = 0; i < pressArray.size() && i < 8; i++) {
-                            action.hidReport.push_back(pressArray[i].as<String>());
-                        }
-                    }
-                    
-                    Serial.printf("Loaded HID report with %d bytes for %s\n", 
-                                 action.hidReport.size(), buttonId.c_str());
-                }
-            }
-            
-            // Check for encoder rotation actions (clockwise/counterclockwise)
-            if (buttonId.startsWith("encoder-")) {
-                // Clockwise action
-                if (buttonConfig.containsKey("clockwise")) {
-                    JsonVariant cwAction = buttonConfig["clockwise"];
-                    if (cwAction.is<JsonArray>()) {
-                        JsonArray cwArray = cwAction.as<JsonArray>();
-                        action.clockwise.clear();
-                        for (size_t i = 0; i < cwArray.size() && i < 8; i++) {
-                            action.clockwise.push_back(cwArray[i].as<String>());
-                        }
-                        Serial.printf("Loaded clockwise HID report with %d bytes for %s\n", 
-                                     action.clockwise.size(), buttonId.c_str());
-                    }
-                }
-                
-                // Counterclockwise action
-                if (buttonConfig.containsKey("counterclockwise")) {
-                    JsonVariant ccwAction = buttonConfig["counterclockwise"];
-                    if (ccwAction.is<JsonArray>()) {
-                        JsonArray ccwArray = ccwAction.as<JsonArray>();
-                        action.counterclockwise.clear();
-                        for (size_t i = 0; i < ccwArray.size() && i < 8; i++) {
-                            action.counterclockwise.push_back(ccwArray[i].as<String>());
-                        }
-                        Serial.printf("Loaded counterclockwise HID report with %d bytes for %s\n", 
-                                     action.counterclockwise.size(), buttonId.c_str());
-                    }
-                }
-            }
-        }
-        else if (action.type == "multimedia") {
-            // Similar processing for multimedia reports
-            if (buttonConfig.containsKey("consumerReport")) {
-                JsonVariant consumerReport = buttonConfig["consumerReport"];
-                
-                if (consumerReport.is<JsonArray>()) {
-                    JsonArray reportArray = consumerReport.as<JsonArray>();
-                    
-                    // Check if we have nested array
-                    if (reportArray.size() > 0 && reportArray[0].is<JsonArray>()) {
-                        JsonArray innerArray = reportArray[0].as<JsonArray>();
-                        
-                        action.consumerReport.clear();
-                        for (size_t i = 0; i < innerArray.size() && i < 4; i++) {
-                            action.consumerReport.push_back(innerArray[i].as<String>());
-                        }
-                    } 
-                    else {
-                        // Handle flat array format
-                        action.consumerReport.clear();
-                        for (size_t i = 0; i < reportArray.size() && i < 4; i++) {
-                            action.consumerReport.push_back(reportArray[i].as<String>());
-                        }
-                    }
-                    
-                    Serial.printf("Loaded Consumer report with %d bytes for %s\n", 
-                                 action.consumerReport.size(), buttonId.c_str());
-                }
-            }
-            
-            // Check for encoder rotation actions for multimedia type
-            if (buttonId.startsWith("encoder-")) {
-                // Clockwise action
-                if (buttonConfig.containsKey("clockwise")) {
-                    JsonVariant cwAction = buttonConfig["clockwise"];
-                    if (cwAction.is<JsonArray>()) {
-                        JsonArray cwArray = cwAction.as<JsonArray>();
-                        action.clockwise.clear();
-                        for (size_t i = 0; i < cwArray.size() && i < 4; i++) {
-                            action.clockwise.push_back(cwArray[i].as<String>());
-                        }
-                        Serial.printf("Loaded clockwise consumer report with %d bytes for %s\n", 
-                                     action.clockwise.size(), buttonId.c_str());
-                    }
-                }
-                
-                // Counterclockwise action
-                if (buttonConfig.containsKey("counterclockwise")) {
-                    JsonVariant ccwAction = buttonConfig["counterclockwise"];
-                    if (ccwAction.is<JsonArray>()) {
-                        JsonArray ccwArray = ccwAction.as<JsonArray>();
-                        action.counterclockwise.clear();
-                        for (size_t i = 0; i < ccwArray.size() && i < 4; i++) {
-                            action.counterclockwise.push_back(ccwArray[i].as<String>());
-                        }
-                        Serial.printf("Loaded counterclockwise consumer report with %d bytes for %s\n", 
-                                     action.counterclockwise.size(), buttonId.c_str());
-                    }
-                }
-            }
-        }
-        else if (action.type == "macro") {
-            action.macroId = buttonConfig["macroId"].as<String>();
-            Serial.printf("Loaded macro ID: %s for %s\n", 
-                         action.macroId.c_str(), buttonId.c_str());
-        }
-        else if (action.type == "layer") {
-            action.targetLayer = buttonConfig["targetLayer"].as<String>();
-            Serial.printf("Loaded target layer: %s for %s\n", 
-                         action.targetLayer.c_str(), buttonId.c_str());
-        }
-        
-        // Store the action configuration
-        actions[buttonId] = action;
+        // Store without loading elements - they'll be loaded on demand
+        displayModes[modeName] = mode;
     }
     
-    Serial.printf("Loaded %d button actions successfully\n", actions.size());
-    return actions;
+    return displayModes;
+}
+
+std::vector<DisplayElement> ConfigManager::loadDisplayElements(const char* filePath, const String& modeName) {
+    std::vector<DisplayElement> elements;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return elements;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(16384);  // Larger buffer for elements
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    if (error) {
+        USBSerial.printf("Error parsing display elements JSON: %s\n", error.c_str());
+        return elements;
+    }
+    
+    // Check if mode exists
+    if (!doc.containsKey("modes") || !doc["modes"].containsKey(modeName) || 
+        !doc["modes"][modeName].containsKey("elements")) {
+        USBSerial.printf("No elements found for mode: %s\n", modeName.c_str());
+        return elements;
+    }
+    
+    // Process each element
+    JsonArray elementsArray = doc["modes"][modeName]["elements"];
+    for (JsonObject elementObj : elementsArray) {
+        DisplayElement element;
+        
+        element.type = elementObj["type"] | 0;
+        element.x = elementObj["x"] | 0;
+        element.y = elementObj["y"] | 0;
+        element.width = elementObj["width"] | 0;
+        element.height = elementObj["height"] | 0;
+        element.text = elementObj["text"] | "";
+        element.variable = elementObj["variable"] | "";
+        element.alignment = elementObj["alignment"] | "left";
+        element.color = elementObj["color"] | 0xFFFF;  // Default white
+        element.size = elementObj["size"] | 1;
+        element.end_x = elementObj["end_x"] | 0;
+        element.end_y = elementObj["end_y"] | 0;
+        element.filled = elementObj["filled"] | false;
+        
+        elements.push_back(element);
+    }
+    
+    return elements;
+}
+
+ModuleInfo ConfigManager::loadModuleInfo(const char* filePath) {
+    ModuleInfo info;
+    String jsonStr = readFile(filePath);
+    
+    if (jsonStr.isEmpty()) {
+        return info;
+    }
+    
+    // Parse the JSON
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, jsonStr);
+    
+    if (error) {
+        USBSerial.printf("Error parsing module info JSON: %s\n", error.c_str());
+        return info;
+    }
+    
+    // Fill in the struct
+    info.name = doc["name"] | "Modular Macropad";
+    info.version = doc["version"] | "1.0.0";
+    info.author = doc["author"] | "User";
+    info.description = doc["description"] | "Default configuration";
+    info.moduleSize = doc["module-size"] | "full";
+    
+    // Grid size is nested
+    if (doc.containsKey("gridSize")) {
+        info.gridRows = doc["gridSize"]["rows"] | 3;
+        info.gridCols = doc["gridSize"]["columns"] | 4;
+    } else {
+        info.gridRows = 3;
+        info.gridCols = 4;
+    }
+    
+    return info;
 }

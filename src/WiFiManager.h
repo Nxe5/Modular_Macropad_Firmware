@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <SPIFFS.h>
+#include <LittleFS.h>
 #include <ArduinoJson.h>
 
 // Forward declarations of handlers needed from other files
@@ -45,7 +45,8 @@ private:
     // WiFi settings
     static String _ssid;
     static String _password;
-    static bool _apMode;
+    static bool _apMode; // True for AP-only mode, false for dual AP+STA mode
+    static String _apName; // Name for the AP when in dual mode
     
     // Server and WebSocket
     static AsyncWebServer _server;

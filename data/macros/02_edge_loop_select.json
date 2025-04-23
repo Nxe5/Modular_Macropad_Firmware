@@ -1,0 +1,27 @@
+{
+  "id": "02_edge_loop_select",
+  "name": "Edge Loop Select",
+  "description": "Instantly selects entire edge loops with a single click. This is essential for efficient modeling as it allows you to quickly select and modify continuous edges around your model. Particularly useful for creating clean topology, adding edge loops for detail, or preparing for operations like beveling or extrusion. Saves time compared to manually selecting multiple edges.",
+  "commands": [
+    {
+      "type": "key_press",
+      "report": ["0x08", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "mouse_click",
+      "button": "left"
+    },
+    {
+      "type": "delay",
+      "milliseconds": 50
+    },
+    {
+      "type": "key_up",
+      "report": ["0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00", "0x00"]
+    }
+  ]
+} 
