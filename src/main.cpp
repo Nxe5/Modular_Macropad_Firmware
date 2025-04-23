@@ -993,6 +993,70 @@ void loop() {
         // }
     }
     
+    // Check Serial for commands
+    if (USBSerial.available()) {
+        String command = USBSerial.readStringUntil('\n');
+        command.trim();
+        
+        if (command == "diagnostics") {
+            USBSerial.println("Starting LittleFS diagnostics...");
+            diagnosticsEnabled = true;
+            currentTest = 0;
+            testCompleted = false;
+            lastDiagnosticTime = 0; // Start immediately
+        } else if (command == "stop") {
+            USBSerial.println("Stopping diagnostics...");
+            diagnosticsEnabled = false;
+        } else if (command == "storage") {
+            checkStorage();
+        } else if (command == "pathtest") {
+            testPathLength();
+        } else if (command == "filenametest") {
+            testFilenames();
+        } else if (command == "fragtest") {
+            testFragmentation();
+        } else if (command == "format") {
+            USBSerial.println("Formatting LittleFS...");
+            LittleFS.format();
+            USBSerial.println("LittleFS formatted. Restarting...");
+            ESP.restart();
+        } else if (command == "dumpactions") {
+            dumpActionsFile();
+        } else if (command == "fixactions") {
+            createWorkingActionsFile();
+        } else if (command == "fsdiag") {
+            runFilesystemDiagnostics();
+        } else if (command == "display") {
+            // Force a display redraw
+            USBSerial.println("Forcing display refresh...");
+            extern void activateDisplayMode(const String& modeName);
+            extern String getCurrentMode();
+            activateDisplayMode(getCurrentMode());
+        } else if (command == "testdisplay") {
+            // Run the display diagnostic pattern
+            USBSerial.println("Running display diagnostic pattern...");
+            extern void drawTestPattern();
+            drawTestPattern();
+            delay(5000);  // Show pattern for 5 seconds
+            activateDisplayMode(getCurrentMode());  // Return to normal display
+        } else if (command == "help") {
+            USBSerial.println("\nAvailable commands:");
+            USBSerial.println("  diagnostics - Run all filesystem tests in sequence");
+            USBSerial.println("  stop - Stop running diagnostics");
+            USBSerial.println("  storage - Check available storage space");
+            USBSerial.println("  pathtest - Test path length limitations");
+            USBSerial.println("  filenametest - Test filename restrictions");
+            USBSerial.println("  fragtest - Test for filesystem fragmentation");
+            USBSerial.println("  format - Format LittleFS filesystem (Warning: Deletes all files!)");
+            USBSerial.println("  dumpactions - Dump the contents of actions.json file");
+            USBSerial.println("  fixactions - Create a working actions.json file with default button mappings");
+            USBSerial.println("  fsdiag - Run detailed filesystem diagnostics");
+            USBSerial.println("  display - Force a display refresh");
+            USBSerial.println("  testdisplay - Show display diagnostic pattern");
+            USBSerial.println("  help - Show this help message");
+        }
+    }
+    
     // No need to call updateKeyHandler here - the task is handling it
     
     // Give other tasks time to run
