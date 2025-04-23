@@ -344,17 +344,12 @@ bool HIDHandler::sendConsumerReport(const uint8_t* report, size_t length) {
                          report[0], report[1], report[2], report[3]);
         USBSerial.printf("Consumer Code: 0x%04X\n", consumerCode);
         
-        bool success = false;
-        // Use Report ID 0x04 as defined in your HID descriptor
-        for (int attempts = 0; attempts < 3; attempts++) {
-            success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&consumerCode), sizeof(consumerCode));
-            if (success) {
-                USBSerial.printf("Consumer Report Sent Successfully (Attempt %d)\n", attempts + 1);
-                break;
-            } else {
-                USBSerial.printf("Consumer Report Send Failed (Attempt %d)\n", attempts + 1);
-                delay(10);
-            }
+        // Send the report with Report ID 0x04
+        bool success = tud_hid_report(0x04, reinterpret_cast<uint8_t*>(&consumerCode), sizeof(consumerCode));
+        if (success) {
+            USBSerial.println("Consumer Report Sent Successfully");
+        } else {
+            USBSerial.println("Consumer Report Send Failed");
         }
         return success;
     } else {

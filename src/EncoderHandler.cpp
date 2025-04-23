@@ -456,9 +456,6 @@ void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) 
     if (encoderActions.find(encoderId) != encoderActions.end()) {
         EncoderAction& action = encoderActions[encoderId];
         
-        // Debug output for loaded action
-        USBSerial.printf("Found action for %s, type: %s\n", encoderId.c_str(), action.type.c_str());
-        
         // No direction inversion - use clockwise directly
         bool actualDirection = clockwise;
         
@@ -471,30 +468,21 @@ void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) 
                 USBSerial.printf("Encoder %d Action: %s multimedia command\n", 
                              encoderIndex, actualDirection ? "CW" : "CCW");
                              
-                // Send consumer report with multiple error checks
-                bool reportSent = false;
-                for (int attempts = 0; attempts < 3; attempts++) {
-                    if (hidHandler->sendConsumerReport(reportToSend.data(), reportToSend.size())) {
-                        reportSent = true;
-                        break;
-                    }
-                    delay(10);
-                }
-                
-                if (!reportSent) {
+                // Send consumer report
+                if (!hidHandler->sendConsumerReport(reportToSend.data(), reportToSend.size())) {
                     USBSerial.printf("FAILED to send multimedia command\n");
                     return;
                 }
                 
-                delay(100);
+                // Add a small delay before sending the release report
+                delay(50);
                 
                 // Release key with empty report
-                uint8_t emptyReport[HID_CONSUMER_REPORT_SIZE] = {0};
-                hidHandler->sendConsumerReport(emptyReport, HID_CONSUMER_REPORT_SIZE);
+                hidHandler->sendEmptyConsumerReport();
             }
         }
         else if (action.type == "hid") {
-            // Use HID keyboard actions
+            // Use HID reports for keyboard actions
             const std::vector<uint8_t>& reportToSend = 
                 actualDirection ? action.cwHidReport : action.ccwHidReport;
                 
@@ -502,31 +490,19 @@ void EncoderHandler::executeEncoderAction(uint8_t encoderIndex, bool clockwise) 
                 USBSerial.printf("Encoder %d Action: %s HID command\n", 
                              encoderIndex, actualDirection ? "CW" : "CCW");
                              
-                // Send HID report with multiple error checks
-                bool reportSent = false;
-                for (int attempts = 0; attempts < 3; attempts++) {
-                    if (hidHandler->sendKeyboardReport(reportToSend.data(), reportToSend.size())) {
-                        reportSent = true;
-                        break;
-                    }
-                    delay(10);
-                }
-                
-                if (!reportSent) {
+                // Send HID report
+                if (!hidHandler->sendKeyboardReport(reportToSend.data(), reportToSend.size())) {
                     USBSerial.printf("FAILED to send HID command\n");
                     return;
                 }
                 
-                delay(100);
+                // Add a small delay before sending the release report
+                delay(50);
                 
                 // Release key with empty report
                 hidHandler->sendEmptyKeyboardReport();
             }
         }
-    } 
-    else {
-        // No action configured for this encoder
-        USBSerial.printf("Encoder %d: No action configured\n", encoderIndex);
     }
 }
 

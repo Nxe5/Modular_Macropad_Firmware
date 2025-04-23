@@ -46,6 +46,8 @@ extern "C" {
 
 #include "FileSystemUtils.h"
 
+#include "VersionManager.h"
+
 // Forward declarations
 void createWorkingActionsFile();
 
@@ -882,6 +884,17 @@ void setup() {
     USBSerial.println("Initializing WiFi Manager...");
     WiFiManager::begin();
 
+    // Initialize version manager
+    Serial.println("=== Device Information ===");
+    Serial.println("Device: " + VersionManager::getDeviceName());
+    Serial.println("Manufacturer: " + VersionManager::getDeviceManufacturer());
+    Serial.println("Model: " + VersionManager::getDeviceModel());
+    Serial.println("Firmware Version: " + VersionManager::getVersionString());
+    Serial.println("Build Number: " + String(VersionManager::getBuildNumber()));
+    Serial.println("Build Date: " + VersionManager::getBuildDate());
+    Serial.println("Build Time: " + VersionManager::getBuildTime());
+    Serial.println("========================");
+    
     // Debug actions configuration
     debugActionsConfig();
     

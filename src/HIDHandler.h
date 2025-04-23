@@ -13,7 +13,7 @@
 
 // HID Report Descriptors
 #define HID_KEYBOARD_REPORT_SIZE 8  // 1 byte report ID + 1 byte modifier + 6 bytes keycodes
-#define HID_CONSUMER_REPORT_SIZE 3  // 1 byte report ID + 2 bytes usage code
+#define HID_CONSUMER_REPORT_SIZE 4  // 4 bytes for consumer report (including report ID)
 #define HID_MOUSE_REPORT_SIZE    5  // 1 byte report ID + 1 byte buttons + 1 byte x + 1 byte y + 1 byte wheel
 #define HID_MAX_KEYS 6  // Maximum keys in one report (excluding modifiers)
 

@@ -27,6 +27,7 @@ extern MacroHandler* macroHandler;
 String WiFiManager::_ssid = "MacroPad";
 String WiFiManager::_password = "macropad123";
 bool WiFiManager::_apMode = true;
+String WiFiManager::_apName = "MacroPad_AP";
 AsyncWebServer WiFiManager::_server(80);
 AsyncWebSocket WiFiManager::_ws("/ws");
 bool WiFiManager::_isConnected = false;
@@ -54,9 +55,11 @@ void WiFiManager::begin() {
 }
 
 void WiFiManager::setupWiFi() {
+    // Always start AP first to ensure we have access in case STA connection fails
+    USBSerial.println("Setting up WiFi AP...");
+    
     if (_apMode) {
-        // Setup AP mode
-        USBSerial.println("Setting up WiFi in AP mode");
+        // AP-only mode
         WiFi.mode(WIFI_AP);
         WiFi.softAP(_ssid.c_str(), _password.c_str());
         
@@ -68,12 +71,22 @@ void WiFiManager::setupWiFi() {
         // Remove display message to prevent screen refresh
         // showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
     } else {
-        // Setup STA mode
-        USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
-        // Remove display message to prevent screen refresh
-        // showTemporaryMessage(("Connecting to WiFi: " + _ssid).c_str(), 3000);
+        // Dual mode - both AP and STA
+        // This allows for connecting to a WiFi network while still providing an AP for configuration
+        WiFi.mode(WIFI_AP_STA);
         
-        WiFi.mode(WIFI_STA);
+        // Set up AP with configured name or default
+        if (_apName.isEmpty()) {
+            _apName = "MacroPad_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+        }
+        WiFi.softAP(_apName.c_str(), "macropad123");
+        
+        IPAddress apIP = WiFi.softAPIP();
+        USBSerial.print("AP IP address: ");
+        USBSerial.println(apIP.toString());
+        
+        // Now connect to the configured WiFi network
+        USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
         WiFi.begin(_ssid.c_str(), _password.c_str());
         
         _connectAttemptStart = millis();
@@ -200,6 +213,10 @@ void WiFiManager::setupWebServer() {
         doc["ssid"] = WiFiManager::_ssid;
         doc["password"] = ""; // Don't send the password for security
         doc["ap_mode"] = WiFiManager::_apMode;
+        doc["ap_name"] = WiFiManager::_apName;
+        doc["sta_connected"] = WiFi.status() == WL_CONNECTED;
+        doc["sta_ip"] = WiFi.localIP().toString();
+        doc["ap_ip"] = WiFi.softAPIP().toString();
         
         String output;
         serializeJson(doc, output);
@@ -229,6 +246,13 @@ void WiFiManager::setupWebServer() {
                     WiFiManager::_apMode = doc["ap_mode"].as<bool>();
                 }
                 
+                if (doc.containsKey("ap_name") && !doc["ap_name"].as<String>().isEmpty()) {
+                    WiFiManager::_apName = doc["ap_name"].as<String>();
+                } else {
+                    // Generate a default AP name if not provided
+                    WiFiManager::_apName = "MacroPad_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+                }
+                
                 WiFiManager::saveWiFiConfig();
                 
                 // Schedule restart after response sent
@@ -237,6 +261,82 @@ void WiFiManager::setupWebServer() {
             }
         }
     );
+    
+    // WiFi Scan
+    _server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
+        USBSerial.println("Scanning for WiFi networks...");
+        
+        int networksFound = WiFi.scanNetworks();
+        USBSerial.printf("Found %d networks\n", networksFound);
+        
+        DynamicJsonDocument doc(4096); // Increase size if needed for many networks
+        JsonArray networks = doc.createNestedArray();
+        
+        for (int i = 0; i < networksFound; i++) {
+            JsonObject network = networks.createNestedObject();
+            network["ssid"] = WiFi.SSID(i);
+            network["rssi"] = WiFi.RSSI(i);
+            
+            // Convert encryption type to string
+            String encryptionType = "Unknown";
+            switch (WiFi.encryptionType(i)) {
+                case WIFI_AUTH_OPEN:
+                    encryptionType = "OPEN";
+                    break;
+                case WIFI_AUTH_WEP:
+                    encryptionType = "WEP";
+                    break;
+                case WIFI_AUTH_WPA_PSK:
+                    encryptionType = "WPA";
+                    break;
+                case WIFI_AUTH_WPA2_PSK:
+                    encryptionType = "WPA2";
+                    break;
+                case WIFI_AUTH_WPA_WPA2_PSK:
+                    encryptionType = "WPA/WPA2";
+                    break;
+                case WIFI_AUTH_WPA2_ENTERPRISE:
+                    encryptionType = "WPA2-Enterprise";
+                    break;
+                default:
+                    encryptionType = "Unknown";
+                    break;
+            }
+            network["encryption"] = encryptionType;
+            
+            // Optional: add the channel
+            network["channel"] = WiFi.channel(i);
+            
+            // Optional: add BSSID (MAC address)
+            char bssid[18] = {0};
+            sprintf(bssid, "%02X:%02X:%02X:%02X:%02X:%02X",
+                    WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2],
+                    WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
+            network["bssid"] = bssid;
+        }
+        
+        // Free memory used by WiFi scan
+        WiFi.scanDelete();
+        
+        String output;
+        serializeJson(networks, output);
+        
+        // Add CORS headers
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", output);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
+
+    // CORS pre-flight for WiFi scan
+    _server.on("/api/wifi/scan", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+        AsyncWebServerResponse *response = request->beginResponse(200);
+        response->addHeader("Access-Control-Allow-Origin", "*");
+        response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+        request->send(response);
+    });
     
     // System Status
     _server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -2005,17 +2105,14 @@ void WiFiManager::update() {
         } else {
             // Check if connection attempt timed out
             if (millis() - _connectAttemptStart > CONNECT_TIMEOUT) {
-                USBSerial.println("WiFi connection timed out. Switching to AP mode.");
+                USBSerial.println("WiFi connection timed out.");
                 
-                // Remove display message to prevent screen refresh
-                // showTemporaryMessage("WiFi connection timed out.\nSwitching to AP mode...", 3000);
+                // In dual mode, we don't need to switch modes since we already have an AP running
+                // Just log that the connection failed
+                USBSerial.println("Operating in dual mode with AP only.");
                 
-                // Switch to AP mode
-                _apMode = true;
-                saveWiFiConfig();
-                
-                // Restart to apply changes
-                ESP.restart();
+                // Reset the connection attempt timer
+                _connectAttemptStart = millis();
             }
         }
     }
@@ -2073,6 +2170,7 @@ void WiFiManager::loadWiFiConfig() {
                 _ssid = doc["ssid"] | "MacroPad";
                 _password = doc["password"] | "macropad123";
                 _apMode = doc["ap_mode"] | true;
+                _apName = doc["ap_name"] | "MacroPad_AP";
                 
                 USBSerial.println("WiFi configuration loaded");
             }
@@ -2088,6 +2186,7 @@ void WiFiManager::saveWiFiConfig() {
     doc["ssid"] = _ssid;
     doc["password"] = _password;
     doc["ap_mode"] = _apMode;
+    doc["ap_name"] = _apName;
     
     String json;
     serializeJson(doc, json);
