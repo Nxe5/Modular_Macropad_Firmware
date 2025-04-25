@@ -211,19 +211,19 @@ bool MacroHandler::saveMacro(const Macro& macro) {
                 
                 // Convert numeric button to string name for better readability
                 switch (cmd.data.mouseClick.button) {
-                    case MOUSE_LEFT:
+                    case MB_LEFT:
                         cmdObj["button"] = "left";
                         break;
-                    case MOUSE_RIGHT:
+                    case MB_RIGHT:
                         cmdObj["button"] = "right";
                         break;
-                    case MOUSE_MIDDLE:
+                    case MB_MIDDLE:
                         cmdObj["button"] = "middle";
                         break;
-                    case MOUSE_BACK:
+                    case MB_BACK:
                         cmdObj["button"] = "back";
                         break;
-                    case MOUSE_FORWARD:
+                    case MB_FORWARD:
                         cmdObj["button"] = "forward";
                         break;
                     default:
@@ -446,15 +446,15 @@ bool MacroHandler::parseMacroFromJson(const JsonObject& macroObj, Macro& macro) 
             if (cmdObj["button"].is<String>()) {
                 String buttonStr = cmdObj["button"].as<String>();
                 if (buttonStr == "left") {
-                    cmd.data.mouseClick.button = MOUSE_LEFT;
+                    cmd.data.mouseClick.button = MB_LEFT;
                 } else if (buttonStr == "right") {
-                    cmd.data.mouseClick.button = MOUSE_RIGHT;
+                    cmd.data.mouseClick.button = MB_RIGHT;
                 } else if (buttonStr == "middle") {
-                    cmd.data.mouseClick.button = MOUSE_MIDDLE;
+                    cmd.data.mouseClick.button = MB_MIDDLE;
                 } else if (buttonStr == "back") {
-                    cmd.data.mouseClick.button = MOUSE_BACK;
+                    cmd.data.mouseClick.button = MB_BACK;
                 } else if (buttonStr == "forward") {
-                    cmd.data.mouseClick.button = MOUSE_FORWARD;
+                    cmd.data.mouseClick.button = MB_FORWARD;
                 } else {
                     USBSerial.println("Error: Unknown mouse button name");
                     continue;

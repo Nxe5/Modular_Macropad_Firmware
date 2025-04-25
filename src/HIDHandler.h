@@ -41,7 +41,8 @@ enum HIDReportType {
 #define KEY_MOD_RALT   0x40
 #define KEY_MOD_RGUI   0x80
 
-// Modifier key range
+// Modifier key range - using USBHIDKeyboard.h definitions if available
+#ifndef KEY_LEFT_CTRL
 #define KEY_LEFT_CTRL   0xE0
 #define KEY_LEFT_SHIFT  0xE1
 #define KEY_LEFT_ALT    0xE2
@@ -50,6 +51,7 @@ enum HIDReportType {
 #define KEY_RIGHT_SHIFT 0xE5
 #define KEY_RIGHT_ALT   0xE6
 #define KEY_RIGHT_GUI   0xE7
+#endif
 
 // HID Report structure
 struct HIDReport {

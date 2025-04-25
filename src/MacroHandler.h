@@ -31,13 +31,13 @@ enum MacroCommandType {
     MACRO_CMD_RANDOM_DELAY    // Wait for a random time within a range
 };
 
-// Mouse button definitions
+// Mouse button definitions - renamed to avoid conflicts with USBHIDMouse.h
 enum MouseButton {
-    MOUSE_LEFT = 1,
-    MOUSE_RIGHT = 2,
-    MOUSE_MIDDLE = 4,
-    MOUSE_BACK = 8,
-    MOUSE_FORWARD = 16
+    MB_LEFT = 1,
+    MB_RIGHT = 2,
+    MB_MIDDLE = 4,
+    MB_BACK = 8,
+    MB_FORWARD = 16
 };
 
 // Structure to represent a macro command

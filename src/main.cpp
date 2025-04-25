@@ -25,7 +25,15 @@ extern "C" {
     esp_err_t esp_littlefs_format_opts(const esp_littlefs_format_opts_t* opts);
 }
 
-// Modules
+// First include USB and HID libraries
+#include <USB.h>
+#include <USBHID.h>
+#include <USBHIDKeyboard.h>
+#include <USBHIDConsumerControl.h>
+#include <USBHIDMouse.h>
+#include <USBCDC.h>
+
+// Then include custom modules that might use USB definitions
 #include "ModuleSetup.h"
 #include "ConfigManager.h"
 #include "KeyHandler.h"  
@@ -34,13 +42,6 @@ extern "C" {
 #include "HIDHandler.h"
 #include "DisplayHandler.h"
 #include "MacroHandler.h"
-
-#include <USB.h>
-#include <USBHID.h>
-#include <USBHIDKeyboard.h>
-#include <USBHIDConsumerControl.h>
-#include <USBHIDMouse.h>
-#include <USBCDC.h>
 
 #include "WiFiManager.h"
 
