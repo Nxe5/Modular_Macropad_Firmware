@@ -67,9 +67,6 @@ void WiFiManager::setupWiFi() {
         USBSerial.print("AP IP address: ");
         USBSerial.println(IP.toString());
         _isConnected = true;
-        
-        // Remove display message to prevent screen refresh
-        // showTemporaryMessage(("WiFi AP Ready\nSSID: " + _ssid + "\nIP: " + IP.toString()).c_str(), 5000);
     } else {
         // Dual mode - both AP and STA
         // This allows for connecting to a WiFi network while still providing an AP for configuration
@@ -85,18 +82,29 @@ void WiFiManager::setupWiFi() {
         USBSerial.print("AP IP address: ");
         USBSerial.println(apIP.toString());
         
+        // Configure WiFi for better scanning
+        WiFi.setAutoReconnect(true);
+        WiFi.setAutoConnect(true);
+        WiFi.setSleep(false); // Disable WiFi sleep for better performance
+        
         // Now connect to the configured WiFi network
         USBSerial.printf("Connecting to WiFi: %s\n", _ssid.c_str());
         WiFi.begin(_ssid.c_str(), _password.c_str());
         
         _connectAttemptStart = millis();
         
-        // Initial connection attempt
+        // Initial connection attempt with better error handling
         int attempts = 0;
         while (WiFi.status() != WL_CONNECTED && attempts < 20) {
             delay(500);
             USBSerial.print(".");
             attempts++;
+            
+            // Check for connection timeout
+            if (millis() - _connectAttemptStart > CONNECT_TIMEOUT) {
+                USBSerial.println("\nConnection attempt timed out");
+                break;
+            }
         }
         
         if (WiFi.status() == WL_CONNECTED) {
@@ -107,17 +115,11 @@ void WiFiManager::setupWiFi() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Remove display message to prevent screen refresh
-            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
-            
             // Broadcast connection status
             broadcastStatus();
         } else {
-            USBSerial.println("Failed to connect in the initial attempt. Will retry in the background.");
+            USBSerial.println("\nFailed to connect in the initial attempt. Will retry in the background.");
             _isConnected = false;
-            
-            // Remove display message to prevent screen refresh
-            // showTemporaryMessage("WiFi connection failed.\nRetrying in background...", 3000);
         }
     }
 }
@@ -330,53 +332,78 @@ void WiFiManager::setupWebServer() {
     _server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
         USBSerial.println("Scanning for WiFi networks...");
         
-        int networksFound = WiFi.scanNetworks();
+        // Ensure we're in the right mode for scanning
+        if (WiFi.getMode() == WIFI_AP) {
+            WiFi.mode(WIFI_AP_STA);
+            delay(100); // Give time for mode change
+        }
+        
+        // Configure scan parameters
+        WiFi.scanNetworks(true, true); // async scan, show hidden networks
+        
+        // Wait for scan to complete with timeout
+        int networksFound = 0;
+        unsigned long scanStart = millis();
+        while (networksFound == 0 && (millis() - scanStart) < 10000) {
+            networksFound = WiFi.scanComplete();
+            if (networksFound == -1) {
+                // Scan still in progress
+                delay(100);
+            } else if (networksFound == -2) {
+                // Scan not triggered
+                WiFi.scanNetworks(true, true);
+                delay(100);
+            }
+        }
+        
         USBSerial.printf("Found %d networks\n", networksFound);
         
         DynamicJsonDocument doc(4096); // Increase size if needed for many networks
         JsonArray networks = doc.createNestedArray();
         
-        for (int i = 0; i < networksFound; i++) {
-            JsonObject network = networks.createNestedObject();
-            network["ssid"] = WiFi.SSID(i);
-            network["rssi"] = WiFi.RSSI(i);
-            
-            // Convert encryption type to string
-            String encryptionType = "Unknown";
-            switch (WiFi.encryptionType(i)) {
-                case WIFI_AUTH_OPEN:
-                    encryptionType = "OPEN";
-                    break;
-                case WIFI_AUTH_WEP:
-                    encryptionType = "WEP";
-                    break;
-                case WIFI_AUTH_WPA_PSK:
-                    encryptionType = "WPA";
-                    break;
-                case WIFI_AUTH_WPA2_PSK:
-                    encryptionType = "WPA2";
-                    break;
-                case WIFI_AUTH_WPA_WPA2_PSK:
-                    encryptionType = "WPA/WPA2";
-                    break;
-                case WIFI_AUTH_WPA2_ENTERPRISE:
-                    encryptionType = "WPA2-Enterprise";
-                    break;
-                default:
-                    encryptionType = "Unknown";
-                    break;
+        if (networksFound > 0) {
+            for (int i = 0; i < networksFound; i++) {
+                JsonObject network = networks.createNestedObject();
+                network["ssid"] = WiFi.SSID(i);
+                network["rssi"] = WiFi.RSSI(i);
+                
+                // Convert encryption type to string
+                String encryptionType = "Unknown";
+                switch (WiFi.encryptionType(i)) {
+                    case WIFI_AUTH_OPEN:
+                        encryptionType = "OPEN";
+                        break;
+                    case WIFI_AUTH_WEP:
+                        encryptionType = "WEP";
+                        break;
+                    case WIFI_AUTH_WPA_PSK:
+                        encryptionType = "WPA";
+                        break;
+                    case WIFI_AUTH_WPA2_PSK:
+                        encryptionType = "WPA2";
+                        break;
+                    case WIFI_AUTH_WPA_WPA2_PSK:
+                        encryptionType = "WPA/WPA2";
+                        break;
+                    case WIFI_AUTH_WPA2_ENTERPRISE:
+                        encryptionType = "WPA2-Enterprise";
+                        break;
+                    default:
+                        encryptionType = "Unknown";
+                        break;
+                }
+                network["encryption"] = encryptionType;
+                
+                // Add the channel
+                network["channel"] = WiFi.channel(i);
+                
+                // Add BSSID (MAC address)
+                char bssid[18] = {0};
+                sprintf(bssid, "%02X:%02X:%02X:%02X:%02X:%02X",
+                        WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2],
+                        WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
+                network["bssid"] = bssid;
             }
-            network["encryption"] = encryptionType;
-            
-            // Optional: add the channel
-            network["channel"] = WiFi.channel(i);
-            
-            // Optional: add BSSID (MAC address)
-            char bssid[18] = {0};
-            sprintf(bssid, "%02X:%02X:%02X:%02X:%02X:%02X",
-                    WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2],
-                    WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
-            network["bssid"] = bssid;
         }
         
         // Free memory used by WiFi scan
@@ -1661,21 +1688,17 @@ void WiFiManager::update() {
             USBSerial.print("IP address: ");
             USBSerial.println(WiFi.localIP());
             
-            // Remove display message to prevent screen refresh
-            // showTemporaryMessage(("WiFi Connected\nIP: " + WiFi.localIP().toString()).c_str(), 5000);
-            
             // Broadcast connection status
             broadcastStatus();
         } else {
             // Check if connection attempt timed out
             if (millis() - _connectAttemptStart > CONNECT_TIMEOUT) {
-                USBSerial.println("WiFi connection timed out.");
+                USBSerial.println("WiFi connection timed out. Retrying...");
                 
-                // In dual mode, we don't need to switch modes since we already have an AP running
-                // Just log that the connection failed
-                USBSerial.println("Operating in dual mode with AP only.");
-                
-                // Reset the connection attempt timer
+                // Try to reconnect
+                WiFi.disconnect();
+                delay(100);
+                WiFi.begin(_ssid.c_str(), _password.c_str());
                 _connectAttemptStart = millis();
             }
         }
