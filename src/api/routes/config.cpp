@@ -1,47 +1,164 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include <USBCDC.h>
+#include <algorithm>
+
+// Forward declaration - make this function available to other cpp files
+extern void setupConfigRoutes(AsyncWebServer *server);
+extern USBCDC USBSerial; // Global serial reference
+
+// Define a smaller document size for safer memory usage
+const size_t JSON_DOCUMENT_SIZE = 8192;
+
+// Generalized handler to serve any JSON config file
+void handleGetConfigFile(AsyncWebServerRequest *request, const char* filePath, bool allowFailover = true) {
+  // First check if the file exists directly in the requested path
+  if (!LittleFS.exists(filePath)) {
+    // If not found, try in the /data prefix
+    String dataPath = String("/data") + filePath;
+    
+    if (!allowFailover || !LittleFS.exists(dataPath)) {
+      USBSerial.printf("Config file not found in either %s or %s\n", filePath, dataPath.c_str());
+      request->send(404, "application/json", "{\"error\":\"Config file not found\"}");
+      return;
+    } else {
+      // Found in data directory
+      USBSerial.printf("Config file found in alternate location: %s\n", dataPath.c_str());
+      filePath = dataPath.c_str();
+    }
+  }
+
+  File file = LittleFS.open(filePath, "r");
+  if (!file) {
+    USBSerial.printf("Failed to open config file: %s\n", filePath);
+    request->send(500, "application/json", "{\"error\":\"Failed to open config file\"}");
+    return;
+  }
+
+  // Check file size before reading
+  size_t fileSize = file.size();
+  USBSerial.printf("Config file size: %d bytes\n", fileSize);
+  
+  if (fileSize == 0) {
+    file.close();
+    USBSerial.printf("Config file is empty: %s\n", filePath);
+    request->send(500, "application/json", "{\"error\":\"Config file is empty\"}");
+    return;
+  }
+  
+  // Read file in small chunks if it's large
+  if (fileSize > 16384) {
+    // For very large files, stream them instead of loading into memory
+    USBSerial.printf("File is large (%d bytes), streaming response\n", fileSize);
+    AsyncWebServerResponse *response = request->beginResponse(LittleFS, filePath, "application/json");
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+    return;
+  }
+  
+  // For smaller files, read them into memory
+  String content = file.readString();
+  file.close();
+  
+  USBSerial.printf("Successfully read config file %s (%d bytes)\n", filePath, content.length());
+
+  // Create a response and set CORS headers
+  AsyncWebServerResponse *response = request->beginResponse(200, "application/json", content);
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+  request->send(response);
+}
+
+// Simplified handleGetActionsConfig function that uses handleGetConfigFile
+void handleGetActionsConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/actions");
+  
+  // Check if file exists in primary location
+  String primaryPath = "/config/actions.json";
+  String fallbackPath = "/data/config/actions.json";
+  String defaultPath = "/config/defaults/actions.json";
+  
+  // Check in order: primary, fallback, defaults
+  if (LittleFS.exists(primaryPath)) {
+    USBSerial.printf("Found actions.json in primary location: %s\n", primaryPath.c_str());
+    handleGetConfigFile(request, primaryPath.c_str(), false);
+  } else if (LittleFS.exists(fallbackPath)) {
+    USBSerial.printf("Found actions.json in fallback location: %s\n", fallbackPath.c_str());
+    handleGetConfigFile(request, fallbackPath.c_str(), false);
+  } else if (LittleFS.exists(defaultPath)) {
+    USBSerial.printf("Using default actions.json: %s\n", defaultPath.c_str());
+    handleGetConfigFile(request, defaultPath.c_str(), false);
+  } else {
+    // No action config files found, return an error
+    USBSerial.println("API ERROR: actions.json not found in any location");
+    request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
+  }
+}
 
 void handleGetReportsConfig(AsyncWebServerRequest *request) {
-  if (!LittleFS.exists("/config/reports.json")) {
-    request->send(404, "application/json", "{\"error\":\"Reports config not found\"}");
-    Serial.println("Reports config not found at /config/reports.json");
-    return;
-  }
-
-  File file = LittleFS.open("/config/reports.json", "r");
-  if (!file) {
-    request->send(500, "application/json", "{\"error\":\"Failed to open reports config\"}");
-    Serial.println("Failed to open reports config file");
-    return;
-  }
-
-  String content = file.readString();
-  file.close();
-  Serial.printf("Successfully read reports config (%d bytes)\n", content.length());
-
-  request->send(200, "application/json", content);
+  USBSerial.println("API: Requested /api/config/reports");
+  handleGetConfigFile(request, "/config/reports.json");
 }
 
-void handleGetActionsConfig(AsyncWebServerRequest *request) {
-  if (!LittleFS.exists("/config/actions.json")) {
-    request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
-    return;
-  }
-
-  File file = LittleFS.open("/config/actions.json", "r");
-  if (!file) {
-    request->send(500, "application/json", "{\"error\":\"Failed to open actions config\"}");
-    return;
-  }
-
-  String content = file.readString();
-  file.close();
-
-  request->send(200, "application/json", content);
+void handleGetComponentsConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/components");
+  handleGetConfigFile(request, "/config/components.json");
 }
 
-void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+void handleGetLedsConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/leds");
+  
+  // Check if file exists in primary location
+  String primaryPath = "/config/leds.json";
+  String fallbackPath = "/data/config/leds.json";
+  String defaultPath = "/config/defaults/leds.json";
+  
+  // Check in order: primary, fallback, defaults
+  if (LittleFS.exists(primaryPath)) {
+    USBSerial.printf("Found leds.json in primary location: %s\n", primaryPath.c_str());
+    handleGetConfigFile(request, primaryPath.c_str(), false);
+  } else if (LittleFS.exists(fallbackPath)) {
+    USBSerial.printf("Found leds.json in fallback location: %s\n", fallbackPath.c_str());
+    handleGetConfigFile(request, fallbackPath.c_str(), false);
+  } else if (LittleFS.exists(defaultPath)) {
+    USBSerial.printf("Using default leds.json: %s\n", defaultPath.c_str());
+    handleGetConfigFile(request, defaultPath.c_str(), false);
+  } else {
+    // Create an empty LED config file with default structure
+    USBSerial.println("No leds.json found, creating empty one");
+    
+    DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
+    doc["leds"] = JsonObject();
+    doc["leds"]["mode"] = "static";
+    
+    // Create a default LED array with all LEDs off
+    JsonArray ledsArray = doc["leds"].createNestedArray("leds");
+    for (int i = 0; i < 16; i++) {
+      JsonObject led = ledsArray.createNestedObject();
+      led["r"] = 0;
+      led["g"] = 0;
+      led["b"] = 0;
+    }
+    
+    // Save to file
+    File file = LittleFS.open(primaryPath, "w");
+    if (file) {
+      serializeJson(doc, file);
+      file.close();
+      handleGetConfigFile(request, primaryPath.c_str(), false);
+    } else {
+      request->send(500, "application/json", "{\"error\":\"Failed to create LEDs config\"}");
+    }
+  }
+}
+
+void handlePostLedsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+  static String accumulatedData = "";
+  
   // Add CORS headers
   AsyncWebServerResponse *response = request->beginResponse(200);
   response->addHeader("Access-Control-Allow-Origin", "*");
@@ -54,92 +171,290 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
     return;
   }
 
-  if (!LittleFS.exists("/config/actions.json")) {
-    request->send(404, "application/json", "{\"error\":\"Actions config not found\"}");
-    return;
+  // Accumulate the data
+  if (index == 0) {
+    accumulatedData = ""; // Reset for new request
+  }
+  accumulatedData += String((char*)data, len);
+  
+  // Only process the complete data in the last chunk
+  if (index + len < total) {
+    return; // Wait for more data
   }
 
-  // Read current actions config
-  File file = LittleFS.open("/config/actions.json", "r");
-  if (!file) {
-    request->send(500, "application/json", "{\"error\":\"Failed to open actions config\"}");
-    return;
+  USBSerial.printf("Received complete LED config update, %d bytes\n", accumulatedData.length());
+  
+  // Log sample data for debugging
+  USBSerial.println("Sample of received data:");
+  for (size_t i = 0; i < std::min(size_t(100), accumulatedData.length()); i++) {
+    USBSerial.print(accumulatedData[i]);
   }
-
-  // Parse current config
-  StaticJsonDocument<4096> doc;
-  DeserializationError error = deserializeJson(doc, file);
-  file.close();
-
-  if (error) {
-    request->send(500, "application/json", "{\"error\":\"Failed to parse current actions config\"}");
-    return;
-  }
-
-  // Parse the new config from the request body
-  StaticJsonDocument<4096> newDoc;
-  error = deserializeJson(newDoc, (char*)data);
-  if (error) {
-    request->send(400, "application/json", "{\"error\":\"Invalid JSON in request body\"}");
-    return;
-  }
-
-  // Get the new layer config from the request
-  JsonObject newConfig = newDoc["actions"]["layer-config"];
-  if (!newConfig) {
-    request->send(400, "application/json", "{\"error\":\"Invalid request format\"}");
-    return;
-  }
-
-  // Update only the components that have new values
-  JsonObject currentLayerConfig = doc["actions"]["layer-config"];
-  for (JsonPair kv : newConfig) {
-    const char* componentId = kv.key().c_str();
-    JsonObject newComponentConfig = kv.value().as<JsonObject>();
-    
-    if (newComponentConfig.isNull()) {
-      // If the new config is null, remove the component from current config
-      currentLayerConfig.remove(componentId);
-    } else {
-      // Update or add the component config
-      currentLayerConfig[componentId] = newComponentConfig;
+  USBSerial.println("\n---");
+  
+  // Ensure the config directory exists
+  if (!LittleFS.exists("/config")) {
+    if (!LittleFS.mkdir("/config")) {
+      request->send(500, "application/json", "{\"error\":\"Failed to create config directory\"}");
+      accumulatedData = ""; // Reset for next request
+      return;
     }
   }
 
-  // Write the updated config back to the file
-  file = LittleFS.open("/config/actions.json", "w");
+  // Parse the JSON data
+  DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
+  DeserializationError error = deserializeJson(doc, accumulatedData);
+  if (error) {
+    USBSerial.printf("Invalid JSON in LED config: %s\n", error.c_str());
+    
+    // Create properly formatted error message
+    String errorMsg = "{\"error\":\"Invalid JSON in request body: ";
+    errorMsg += error.c_str();
+    errorMsg += "\"}";
+    
+    request->send(400, "application/json", errorMsg);
+    accumulatedData = ""; // Reset for next request
+    return;
+  }
+
+  // Write the config directly to file
+  File file = LittleFS.open("/config/leds.json", "w");
   if (!file) {
-    request->send(500, "application/json", "{\"error\":\"Failed to write actions config\"}");
+    request->send(500, "application/json", "{\"error\":\"Failed to open LEDs config for writing\"}");
+    accumulatedData = ""; // Reset for next request
     return;
   }
 
-  if (serializeJson(doc, file) == 0) {
-    file.close();
-    request->send(500, "application/json", "{\"error\":\"Failed to write actions config\"}");
-    return;
-  }
-
+  // Serialize the updated config
+  size_t serializedSize = serializeJson(doc, file);
   file.close();
+  
+  if (serializedSize == 0) {
+    request->send(500, "application/json", "{\"error\":\"Failed to write LEDs config\"}");
+    accumulatedData = ""; // Reset for next request
+    return;
+  }
+
+  USBSerial.printf("Successfully updated LEDs config (%d bytes)\n", serializedSize);
+  request->send(200, "application/json", "{\"message\":\"LEDs config updated successfully\"}");
+  accumulatedData = ""; // Reset for next request
+}
+
+void handleGetInfoConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/info");
+  handleGetConfigFile(request, "/config/info.json");
+}
+
+void handleGetDisplayConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/display");
+  handleGetConfigFile(request, "/config/display.json");
+}
+
+void handleGetExampleConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/example");
+  handleGetConfigFile(request, "/config/example.json");
+}
+
+void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+  static String accumulatedData = "";
+  
+  // Add CORS headers for when pre-flight check is done
+  AsyncWebServerResponse *response = request->beginResponse(200);
+  response->addHeader("Access-Control-Allow-Origin", "*");
+  response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+  
+  // Handle OPTIONS request for CORS preflight
+  if (request->method() == HTTP_OPTIONS) {
+    request->send(response);
+    return;
+  }
+  
+  // Accumulate the data
+  if (index == 0) {
+    accumulatedData = ""; // Reset for new request
+  }
+  accumulatedData += String((char*)data, len);
+  
+  // Only process the complete data in the last chunk
+  if (index + len < total) {
+    return; // Wait for more data
+  }
+
+  USBSerial.printf("Received complete actions config update, %d bytes\n", accumulatedData.length());
+  
+  // Ensure the config directory exists
+  if (!LittleFS.exists("/config")) {
+    if (!LittleFS.mkdir("/config")) {
+      request->send(500, "application/json", "{\"error\":\"Failed to create config directory\"}");
+      accumulatedData = ""; // Reset for next request
+      return;
+    }
+  }
+  
+  // Validate JSON data
+  DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
+  DeserializationError error = deserializeJson(doc, accumulatedData);
+  if (error) {
+    USBSerial.printf("Failed to parse actions JSON: %s\n", error.c_str());
+    request->send(400, "application/json", "{\"error\":\"Invalid JSON format in request\"}");
+    accumulatedData = ""; // Reset for next request
+    return;
+  }
+  
+  // Write to file
+  File file = LittleFS.open("/config/actions.json", "w");
+  if (!file) {
+    request->send(500, "application/json", "{\"error\":\"Failed to open actions config for writing\"}");
+    accumulatedData = ""; // Reset for next request
+    return;
+  }
+  
+  size_t bytesWritten = file.print(accumulatedData);
+  file.close();
+  
+  if (bytesWritten != accumulatedData.length()) {
+    request->send(500, "application/json", "{\"error\":\"Failed to write complete actions config\"}");
+    accumulatedData = ""; // Reset for next request
+    return;
+  }
+  
+  USBSerial.printf("Successfully saved actions config (%d bytes)\n", bytesWritten);
   request->send(200, "application/json", "{\"message\":\"Actions config updated successfully\"}");
+  accumulatedData = ""; // Reset for next request
+}
+
+void handleGetWiFiConfig(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/config/wifi");
+  
+  // Create JSON response with WiFi configuration
+  DynamicJsonDocument doc(1024);
+  doc["wifi"]["connected"] = WiFi.status() == WL_CONNECTED;
+  doc["wifi"]["ssid"] = WiFi.SSID();
+  doc["wifi"]["ap_mode"] = WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;
+  doc["wifi"]["ip"] = WiFi.localIP().toString();
+  
+  if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+    doc["wifi"]["ap_ssid"] = WiFi.softAPSSID();
+    doc["wifi"]["ap_ip"] = WiFi.softAPIP().toString();
+  }
+  
+  String output;
+  serializeJson(doc, output);
+  request->send(200, "application/json", output);
+}
+
+void handleWiFiScan(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/wifi/scan");
+  
+  // Scan for networks
+  int n = WiFi.scanNetworks();
+  
+  DynamicJsonDocument doc(4096);
+  JsonArray networks = doc.createNestedArray("networks");
+  
+  for (int i = 0; i < n; i++) {
+    JsonObject network = networks.createNestedObject();
+    network["ssid"] = WiFi.SSID(i);
+    network["rssi"] = WiFi.RSSI(i);
+    network["encryption"] = WiFi.encryptionType(i);
+    network["channel"] = WiFi.channel(i);
+  }
+  
+  String output;
+  serializeJson(doc, output);
+  request->send(200, "application/json", output);
+}
+
+void handleGetStatus(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/status");
+  
+  DynamicJsonDocument doc(1024);
+  doc["status"] = "ok";
+  doc["version"] = "1.0.0"; // Replace with actual version
+  doc["uptime"] = millis() / 1000;
+  doc["memory"]["free"] = ESP.getFreeHeap();
+  doc["memory"]["total"] = ESP.getHeapSize();
+  
+  // Add WiFi information
+  doc["wifi"]["connected"] = WiFi.status() == WL_CONNECTED;
+  if (WiFi.status() == WL_CONNECTED) {
+    doc["wifi"]["ssid"] = WiFi.SSID();
+    doc["wifi"]["rssi"] = WiFi.RSSI();
+  }
+  
+  String output;
+  serializeJson(doc, output);
+  request->send(200, "application/json", output);
 }
 
 void setupConfigRoutes(AsyncWebServer *server) {
-  // Add reports configuration endpoint
-  server->on("/api/config/reports", HTTP_GET, handleGetReportsConfig);
-
-  // Add actions configuration endpoints
-  server->on("/api/config/actions", HTTP_GET, handleGetActionsConfig);
+  // Log when this function is called
+  USBSerial.println("INFO: Setting up API config routes");
   
-  // Register POST handler with body handling
-  server->on("/api/config/actions", HTTP_POST, 
-    [](AsyncWebServerRequest *request) {}, 
-    NULL,
+  // IMPORTANT: These routes should not be duplicated in WiFiManager.cpp
+  // After merging branches, make sure no duplicate routes exist!
+  
+  // GET handlers for all config files
+  server->on("/api/config/reports", HTTP_GET, handleGetReportsConfig);
+  server->on("/api/config/actions", HTTP_GET, handleGetActionsConfig);
+  server->on("/api/config/components", HTTP_GET, handleGetComponentsConfig);
+  server->on("/api/config/leds", HTTP_GET, handleGetLedsConfig);
+  server->on("/api/config/info", HTTP_GET, handleGetInfoConfig);
+  server->on("/api/config/display", HTTP_GET, handleGetDisplayConfig);
+  server->on("/api/config/example", HTTP_GET, handleGetExampleConfig);
+  server->on("/api/config/wifi", HTTP_GET, handleGetWiFiConfig);
+  server->on("/api/wifi/scan", HTTP_GET, handleWiFiScan);
+  server->on("/api/status", HTTP_GET, handleGetStatus);
+  
+  // Print route registrations
+  USBSerial.println("  - Registered /api/config/reports (GET)");
+  USBSerial.println("  - Registered /api/config/actions (GET)");
+  USBSerial.println("  - Registered /api/config/components (GET)");
+  USBSerial.println("  - Registered /api/config/leds (GET)");
+  USBSerial.println("  - Registered /api/config/info (GET)");
+  USBSerial.println("  - Registered /api/config/display (GET)");
+  USBSerial.println("  - Registered /api/config/example (GET)");
+  USBSerial.println("  - Registered /api/config/wifi (GET)");
+  USBSerial.println("  - Registered /api/wifi/scan (GET)");
+  USBSerial.println("  - Registered /api/status (GET)");
+  
+  // POST handlers
+  server->on(
+    "/api/config/actions", 
+    HTTP_POST, 
+    [](AsyncWebServerRequest *request) {
+      // Empty handler for the request completion
+    }, 
+    NULL,  // Upload handler is null as we handle everything in the body handler
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
       handlePostActionsConfig(request, data, len, index, total);
     }
   );
+  USBSerial.println("  - Registered /api/config/actions (POST)");
+  
+  // Add POST handler for LEDs config
+  server->on(
+    "/api/config/leds", 
+    HTTP_POST, 
+    [](AsyncWebServerRequest *request) {
+      // Empty handler for the request completion
+    }, 
+    NULL,  // Upload handler is null as we handle everything in the body handler
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+      handlePostLedsConfig(request, data, len, index, total);
+    }
+  );
+  USBSerial.println("  - Registered /api/config/leds (POST)");
 
-  // Add CORS preflight handler
+  // CORS preflight handlers
+  server->on("/api/config/reports", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
   server->on("/api/config/actions", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
     AsyncWebServerResponse *response = request->beginResponse(200);
     response->addHeader("Access-Control-Allow-Origin", "*");
@@ -147,4 +462,201 @@ void setupConfigRoutes(AsyncWebServer *server) {
     response->addHeader("Access-Control-Allow-Headers", "Content-Type");
     request->send(response);
   });
+  
+  server->on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/config/leds", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+    USBSerial.println("  - Handled OPTIONS preflight for /api/config/leds");
+  });
+  
+  server->on("/api/config/info", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/config/display", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/config/example", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/config/wifi", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/wifi/scan", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/status", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  USBSerial.println("  - Registered OPTIONS handlers for CORS preflight");
+  USBSerial.println("Config routes successfully registered");
+
+  // Add a debug endpoint that returns the status of all registered routes
+  server->on("/api/debug/routes", HTTP_GET, [server](AsyncWebServerRequest *request) {
+    USBSerial.println("API: Requested /api/debug/routes");
+    
+    // Create a JSON response with information about all API routes
+    DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
+    doc["status"] = "ok";
+    doc["message"] = "API route info";
+    
+    JsonObject routes = doc.createNestedObject("routes");
+    routes["config"] = true;
+    routes["config_routes_registered"] = true;
+    
+    // Add server uptime and memory info
+    JsonObject system = doc.createNestedObject("system");
+    system["uptime_ms"] = millis();
+    system["free_heap"] = ESP.getFreeHeap();
+    system["config_dir_exists"] = LittleFS.exists("/config");
+    system["data_config_dir_exists"] = LittleFS.exists("/data/config");
+    
+    // Add path existence info
+    JsonObject paths = doc.createNestedObject("paths");
+    String configFiles[] = {"actions.json", "reports.json", "components.json", "leds.json", "info.json", "display.json"};
+    for (const String& file : configFiles) {
+      String path = "/config/" + file;
+      String dataPath = "/data/config/" + file;
+      String defaultPath = "/config/defaults/" + file;
+      
+      JsonObject fileObj = paths.createNestedObject(file);
+      fileObj["config"] = LittleFS.exists(path);
+      fileObj["data_config"] = LittleFS.exists(dataPath);
+      fileObj["defaults"] = LittleFS.exists(defaultPath);
+      
+      // If the file exists, add its size
+      if (LittleFS.exists(path)) {
+        File f = LittleFS.open(path, "r");
+        if (f) {
+          fileObj["size"] = f.size();
+          f.close();
+        }
+      }
+    }
+    
+    // Serialize the JSON document
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+  });
+  USBSerial.println("  - Registered /api/debug/routes (GET)");
+  
+  // Add debug handlers for raw data saving (no validation)
+  server->on(
+    "/api/debug/raw/leds", 
+    HTTP_POST, 
+    [](AsyncWebServerRequest *request) {
+      // Empty handler for request completion
+    },
+    NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+      USBSerial.printf("Raw LED data received: %d bytes\n", len);
+      
+      // Create file without validation
+      File file = LittleFS.open("/config/leds.json", "w");
+      if (!file) {
+        request->send(500, "application/json", "{\"error\":\"Failed to open file\"}");
+        return;
+      }
+      
+      size_t written = file.write(data, len);
+      file.close();
+      
+      if (written != len) {
+        request->send(500, "application/json", "{\"error\":\"Failed to write data\"}");
+        return;
+      }
+      
+      request->send(200, "application/json", "{\"success\":true}");
+    }
+  );
+  
+  server->on(
+    "/api/debug/raw/actions", 
+    HTTP_POST, 
+    [](AsyncWebServerRequest *request) {
+      // Empty handler for request completion
+    },
+    NULL,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+      USBSerial.printf("Raw actions data received: %d bytes\n", len);
+      
+      // Create file without validation
+      File file = LittleFS.open("/config/actions.json", "w");
+      if (!file) {
+        request->send(500, "application/json", "{\"error\":\"Failed to open file\"}");
+        return;
+      }
+      
+      size_t written = file.write(data, len);
+      file.close();
+      
+      if (written != len) {
+        request->send(500, "application/json", "{\"error\":\"Failed to write data\"}");
+        return;
+      }
+      
+      request->send(200, "application/json", "{\"success\":true}");
+    }
+  );
+  
+  // CORS handlers for debug endpoints
+  server->on("/api/debug/raw/leds", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/debug/raw/actions", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  USBSerial.println("  - Registered debug raw data handlers");
 } 

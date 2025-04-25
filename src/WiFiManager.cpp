@@ -134,48 +134,46 @@ void WiFiManager::setupWebServer() {
     // Serve static files from LittleFS
     _server.serveStatic("/", LittleFS, "/web/").setDefaultFile("index.html");
     
-    // Handle file not found
-    _server.onNotFound([](AsyncWebServerRequest *request) {
-        request->send(404, "text/plain", "File not found");
+    // First register all specific API routes before any catch-all handlers
+    
+    // ===== CONFIG ROUTES =====
+    // Remove all individual config route handlers and use the centralized implementation
+    // from api/routes/config.cpp instead to avoid conflicts
+    extern void setupConfigRoutes(AsyncWebServer *server);
+    setupConfigRoutes(&_server);
+    USBSerial.println("Config API routes registered");
+    
+    // Add a specific handler for index.html to help debug issues
+    _server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+        USBSerial.println("API: Request for root path (/)");
+        
+        // Check if index.html exists
+        if (!LittleFS.exists("/web/index.html")) {
+            USBSerial.println("API ERROR: index.html not found in /web/ directory");
+            request->send(404, "text/plain", "Web interface not found. Have you uploaded the web files?");
+            return;
+        }
+        
+        File file = LittleFS.open("/web/index.html", "r");
+        if (!file) {
+            USBSerial.println("API ERROR: Failed to open index.html");
+            request->send(500, "text/plain", "Failed to serve web interface");
+            return;
+        }
+        
+        String content = file.readString();
+        file.close();
+        
+        USBSerial.printf("API: Successfully read index.html (%d bytes)\n", content.length());
+        
+        // Send with proper content type
+        AsyncWebServerResponse *response = request->beginResponse(200, "text/html", content);
+        request->send(response);
     });
     
     // Config web server
     _server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request) {
         request->send(LittleFS, "/web/favicon.ico", "image/x-icon");
-    });
-    
-    // Add a request logger for debugging
-    _server.onNotFound([](AsyncWebServerRequest *request) {
-        USBSerial.print("DEBUG - Request to: ");
-        USBSerial.print(request->url());
-        USBSerial.print(" (Method: ");
-        
-        switch (request->method()) {
-            case HTTP_GET: USBSerial.print("GET"); break;
-            case HTTP_POST: USBSerial.print("POST"); break;
-            case HTTP_DELETE: USBSerial.print("DELETE"); break;
-            case HTTP_PUT: USBSerial.print("PUT"); break;
-            case HTTP_PATCH: USBSerial.print("PATCH"); break;
-            case HTTP_HEAD: USBSerial.print("HEAD"); break;
-            case HTTP_OPTIONS: USBSerial.print("OPTIONS"); break;
-            default: USBSerial.print("UNKNOWN"); break;
-        }
-        
-        USBSerial.print(", Client IP: ");
-        USBSerial.print(request->client()->remoteIP().toString());
-        USBSerial.println(")");
-        
-        // Log any parameters
-        if (request->params() > 0) {
-            USBSerial.println("Request Parameters:");
-            for (int i = 0; i < request->params(); i++) {
-                const AsyncWebParameter* p = request->getParam(i);
-                USBSerial.printf("  %s: %s\n", p->name().c_str(), p->value().c_str());
-            }
-        }
-        
-        // Send 404 response
-        request->send(404, "text/plain", "Not found");
     });
     
     // Serve CSS file
@@ -189,6 +187,12 @@ void WiFiManager::setupWebServer() {
     // Add a catch-all handler for JavaScript files to ensure proper MIME type
     _server.on("/*", HTTP_GET, [](AsyncWebServerRequest *request) {
         String path = request->url();
+        
+        // Skip API routes - let their dedicated handlers process them
+        if (path.startsWith("/api/")) {
+            USBSerial.printf("Skipping catch-all for API route: %s\n", path.c_str());
+            return; // Simply return without handling API routes
+        }
         
         // Check if this is a JS file
         if (path.endsWith(".js")) {
@@ -237,7 +241,8 @@ void WiFiManager::setupWebServer() {
         }
         
         // Let the default handler take care of other file types
-        request->send(200, "text/plain", "File not found");
+        // Properly return a 404 with a JSON message for consistency
+        request->send(404, "application/json", "{\"error\":\"File not found\"}");
     });
     
     // API endpoints
@@ -550,548 +555,6 @@ void WiFiManager::setupWebServer() {
 
     // Add CORS preflight handler for components endpoint
     _server.on("/api/config/components", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get actions.json config file
-    _server.on("/api/config/actions", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(LittleFS, "/config/actions.json", "application/json");
-    });
-    
-    // Update actions.json config file
-    _server.on("/api/config/actions", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing actions config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Verify the JSON structure
-                if (!doc.containsKey("actions")) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Missing 'actions' key in JSON\"}";
-                    USBSerial.println("Missing 'actions' key in JSON");
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!LittleFS.exists("/config/actions.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Actions config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = LittleFS.open("/config/actions.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open actions config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                // Write the serialized JSON string
-                if (!file.print(jsonString)) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write actions config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-                
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = LittleFS.open("/config/actions.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify actions config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Verify the content is valid JSON
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Actions config verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Send success response
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Actions config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Actions configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for actions endpoint
-    _server.on("/api/config/actions", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get reports.json config file
-    _server.on("/api/config/reports", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(LittleFS, "/config/reports.json", "application/json");
-    });
-    
-    // Update reports.json config file
-    _server.on("/api/config/reports", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing reports config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!LittleFS.exists("/config/reports.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Reports config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = LittleFS.open("/config/reports.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open reports config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write reports config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = LittleFS.open("/config/reports.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Reports config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Reports configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for reports endpoint
-    _server.on("/api/config/reports", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get LEDs.json config file
-    _server.on("/api/config/leds", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(LittleFS, "/config/leds.json", "application/json");
-    });
-    
-    // Update LEDs.json config file
-    _server.on("/api/config/leds", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing leds config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!LittleFS.exists("/config/leds.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Leds config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = LittleFS.open("/config/leds.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open leds config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write leds config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = LittleFS.open("/config/leds.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Leds config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Reports configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for leds endpoint
-    _server.on("/api/config/leds", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
-        AsyncWebServerResponse *response = request->beginResponse(200);
-        response->addHeader("Access-Control-Allow-Origin", "*");
-        response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-        response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-        request->send(response);
-    });
-    
-    // Get info.json config file
-    _server.on("/api/config/info", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(LittleFS, "/config/info.json", "application/json");
-    });
-    
-    // Update info.json config file
-    _server.on("/api/config/info", HTTP_POST, 
-        [](AsyncWebServerRequest *request) {
-            request->send(200, "application/json", "{\"status\":\"processing\",\"message\":\"Processing info config update...\"}");
-        },
-        NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-            static String accumulatedData = "";
-            
-            // Add CORS headers
-            AsyncWebServerResponse *response = request->beginResponse(200);
-            response->addHeader("Access-Control-Allow-Origin", "*");
-            response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-            response->addHeader("Access-Control-Allow-Headers", "Content-Type");
-
-            // Handle OPTIONS request for CORS preflight
-            if (request->method() == HTTP_OPTIONS) {
-                request->send(response);
-                return;
-            }
-
-            // Log the received chunk
-            USBSerial.println("Received chunk:");
-            USBSerial.write(data, len);
-            USBSerial.println();
-
-            // Accumulate the data
-            accumulatedData += String((char*)data, len);
-
-            // If this is the last chunk, process the complete data
-            if (index + len >= total) {
-                USBSerial.println("Processing complete data:");
-                USBSerial.println(accumulatedData);
-
-                // Validate that we received valid JSON
-                DynamicJsonDocument doc(16384);
-                DeserializationError error = deserializeJson(doc, accumulatedData);
-                
-                if (error) {
-                    String errorMsg = "{\"status\":\"error\",\"message\":\"Invalid JSON format\",\"details\":\"" + String(error.c_str()) + "\"}";
-                    USBSerial.println("JSON parsing error: " + String(error.c_str()));
-                    request->send(400, "application/json", errorMsg);
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                if (!LittleFS.exists("/config/info.json")) {
-                    request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"Info config file not found\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Write the new config directly to the file
-                File file = LittleFS.open("/config/info.json", "w");
-                if (!file) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to open info config file for writing\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Serialize the JSON document to ensure proper formatting
-                String jsonString;
-                serializeJson(doc, jsonString);
-                
-                // Log the JSON string before writing
-                USBSerial.println("Writing JSON to file:");
-                USBSerial.println(jsonString);
-                
-                if (file.print(jsonString) != jsonString.length()) {
-                    file.close();
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to write info config to file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                file.close();
-
-                // Verify the file was written correctly
-                File verifyFile = LittleFS.open("/config/info.json", "r");
-                if (!verifyFile) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to verify written config file\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                String verifyContent = verifyFile.readString();
-                verifyFile.close();
-
-                // Log the verification content
-                USBSerial.println("Verification content:");
-                USBSerial.println(verifyContent);
-
-                // Parse the verification content
-                DynamicJsonDocument verifyDoc(16384);
-                DeserializationError verifyError = deserializeJson(verifyDoc, verifyContent);
-                
-                if (verifyError) {
-                    request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Config file verification failed\",\"details\":\"" + String(verifyError.c_str()) + "\"}");
-                    accumulatedData = ""; // Reset for next request
-                    return;
-                }
-
-                // Success response with verification
-                request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Info config updated successfully\",\"verified\":true}");
-                accumulatedData = ""; // Reset for next request
-
-                // Reload the configuration
-                if (keyHandler) {
-                    auto actions = ConfigManager::loadActions("/config/actions.json");
-                    keyHandler->loadKeyConfiguration(actions);
-                    USBSerial.println("Key configuration reloaded");
-                }
-                USBSerial.println("LED configuration reloaded");
-                // Use the global function to initialize/reload LEDs
-                initializeLED();
-            }
-        }
-    );
-
-    // Add CORS preflight handler for info endpoint
-    _server.on("/api/config/info", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
         AsyncWebServerResponse *response = request->beginResponse(200);
         response->addHeader("Access-Control-Allow-Origin", "*");
         response->addHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
@@ -1417,7 +880,49 @@ void WiFiManager::setupWebServer() {
     
     // 404 handler
     _server.onNotFound([](AsyncWebServerRequest *request) {
-        request->send(404, "text/plain", "Not found");
+        String url = request->url();
+        
+        USBSerial.print("DEBUG - Request to: ");
+        USBSerial.print(url);
+        USBSerial.print(" (Method: ");
+        
+        switch (request->method()) {
+            case HTTP_GET: USBSerial.print("GET"); break;
+            case HTTP_POST: USBSerial.print("POST"); break;
+            case HTTP_DELETE: USBSerial.print("DELETE"); break;
+            case HTTP_PUT: USBSerial.print("PUT"); break;
+            case HTTP_PATCH: USBSerial.print("PATCH"); break;
+            case HTTP_HEAD: USBSerial.print("HEAD"); break;
+            case HTTP_OPTIONS: USBSerial.print("OPTIONS"); break;
+            default: USBSerial.print("UNKNOWN"); break;
+        }
+        
+        USBSerial.print(", Client IP: ");
+        USBSerial.print(request->client()->remoteIP().toString());
+        USBSerial.println(")");
+        
+        // Log any parameters
+        if (request->params() > 0) {
+            USBSerial.println("Request Parameters:");
+            for (int i = 0; i < request->params(); i++) {
+                const AsyncWebParameter* p = request->getParam(i);
+                USBSerial.printf("  %s: %s\n", p->name().c_str(), p->value().c_str());
+            }
+        }
+
+        // Note: We need to be careful with API routes - the onNotFound handler might be
+        // catching them before the registered routes have a chance to process them.
+        // If we're seeing 404s for API calls, this could be the issue.
+        USBSerial.println("WARNING: Resource not found. If this is an API route, check for route registration issues.");
+        
+        // Send appropriate error format based on the request type
+        if (url.startsWith("/api/")) {
+            USBSerial.println("API endpoint not found - sending JSON 404");
+            request->send(404, "application/json", "{\"error\":\"API endpoint not found\"}");
+        } else {
+            // Send regular 404 for non-API routes
+            request->send(404, "text/plain", "Not found");
+        }
     });
     
     // Add CORS preflight handler for display endpoint
