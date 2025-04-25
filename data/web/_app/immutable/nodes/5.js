@@ -1,1 +1,1 @@
-import{k as m}from"../chunks/vg_PTh7i.js";export{m as component};
+import{k as m}from"../chunks/GF2OhrfO.js";export{m as component};

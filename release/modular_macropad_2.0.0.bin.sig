@@ -1,0 +1,1 @@
+9a0a62aa8b64f2e5158b41927356ce62c61dd7ce4b01fc92f66e778376953c1c  release/modular_macropad_2.0.0.bin

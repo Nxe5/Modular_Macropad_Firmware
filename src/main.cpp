@@ -50,9 +50,15 @@ extern "C" {
 #include "VersionManager.h"
 
 #include "OTAUpdateManager.h"
+#include "RecoveryBootloader.h"
+#include "PartitionVerifier.h"
+#include "UpdateProgressDisplay.h"
 
 // Forward declarations
 void createWorkingActionsFile();
+bool shouldAutoUpdate();
+void performFirmwareUpdate();
+void handleRecoveryMode();
 
 // Initialize USB devices
 USBHIDKeyboard Keyboard;
@@ -805,7 +811,83 @@ void runFilesystemDiagnostics() {
     USBSerial.println("==== END DIAGNOSTICS ====\n");
 }
 
+// Helper to check if automatic updates are enabled
+bool shouldAutoUpdate() {
+    // This could be a setting in the configuration
+    // For now, return false (manual updates only)
+    return false;
+}
+
+// Perform the firmware update
+void performFirmwareUpdate() {
+    if (!OTAUpdateManager::isUpdateAvailable()) {
+        USBSerial.println("No update available to perform");
+        return;
+    }
+    
+    USBSerial.println("Starting firmware update to version " + OTAUpdateManager::getAvailableVersion());
+    
+    // Set up a progress callback for display updates
+    auto progressCallback = [](size_t current, size_t total, int percentage) {
+        UpdateProgressDisplay::updateProgress(current, total, percentage);
+    };
+    
+    // Show initial progress screen
+    UpdateProgressDisplay::drawProgressScreen("Firmware Update", 0, "Starting update...");
+    
+    // Perform the update with progress callback
+    if (OTAUpdateManager::performUpdate(OTAUpdateManager::getFirmwareUrl(), progressCallback)) {
+        // Update successful - this will only be reached if the restart after update fails
+        UpdateProgressDisplay::drawSuccessScreen("Update complete");
+    } else {
+        // Update failed
+        USBSerial.println("Update failed: " + OTAUpdateManager::getLastError());
+        UpdateProgressDisplay::drawErrorScreen(OTAUpdateManager::getLastError());
+    }
+}
+
+// Handle recovery mode
+void handleRecoveryMode() {
+    static bool recoveryScreenShown = false;
+    
+    if (!recoveryScreenShown) {
+        // Show recovery screen
+        UpdateProgressDisplay::drawRecoveryScreen(RecoveryBootloader::getStatusMessage());
+        recoveryScreenShown = true;
+        
+        USBSerial.println("Device is in recovery mode");
+        USBSerial.println("Reason: " + RecoveryBootloader::getStatusMessage());
+        
+        // Attempt recovery from failed update if needed
+        if (OTAUpdateManager::isInRecoveryMode()) {
+            USBSerial.println("Attempting to recover from failed update...");
+            if (OTAUpdateManager::rollbackFirmware()) {
+                USBSerial.println("Rollback successful, restarting...");
+                delay(1000);
+                ESP.restart();
+            } else {
+                USBSerial.println("Rollback failed: " + OTAUpdateManager::getLastError());
+            }
+        }
+    }
+    
+    // Handle WiFi in recovery mode to allow OTA updates
+    WiFiManager::update();
+    
+    // Minimal recovery mode loop
+    delay(100);
+}
+
 void setup() {
+    // Initialize the recovery bootloader first (before any other components)
+    RecoveryBootloader::begin();
+    
+    // Check if we are in recovery mode
+    if (RecoveryBootloader::shouldEnterRecoveryMode()) {
+        // Recovery mode will be handled in the loop
+        // Continue with initialization to ensure critical components are available
+    }
+    
     // Initialize USB in Serial mode
     USB.begin();
     USBSerial.begin();
@@ -856,6 +938,10 @@ void setup() {
     // Initialize display
     USBSerial.println("Initializing display...");
     initializeDisplay();
+    
+    // Initialize update progress display
+    USBSerial.println("Initializing update progress display...");
+    UpdateProgressDisplay::begin(getDisplay());
     
     // Initialize module configuration
     USBSerial.println("Initializing module configuration...");
@@ -930,12 +1016,40 @@ void setup() {
     xTaskCreate(encoderTask, "encoder_task", 4096, NULL, 2, NULL);
 
     // Initialize OTA Update Manager
+    USBSerial.println("Initializing OTA Update Manager...");
     OTAUpdateManager::begin();
+    
+    // Verify boot integrity
+    if (!OTAUpdateManager::verifyBootIntegrity()) {
+        USBSerial.println("Boot integrity check failed: " + OTAUpdateManager::getLastError());
+    } else {
+        USBSerial.println("Boot integrity verified");
+    }
+    
+    // Verify partition integrity
+    USBSerial.println("Verifying partition integrity...");
+    if (PartitionVerifier::verifyOTAPartition()) {
+        USBSerial.println("OTA partition integrity verified");
+    } else {
+        USBSerial.println("OTA partition integrity check failed: " + PartitionVerifier::getLastError());
+    }
+    
+    // Print partition information
+    USBSerial.println(PartitionVerifier::getAllPartitionsInfo());
 
     USBSerial.println("Setup complete - entering main loop");
 }
 
 void loop() {
+    // Check if in recovery mode
+    if (RecoveryBootloader::getBootloaderState() == RecoveryBootloader::RECOVERY_MODE) {
+        handleRecoveryMode();
+        return;  // Skip normal loop processing in recovery mode
+    }
+    
+    // Update OTA progress display
+    UpdateProgressDisplay::process();
+    
     // Update WiFi Manager
     WiFiManager::update();
 
@@ -954,15 +1068,6 @@ void loop() {
     // Run LittleFS diagnostics if enabled
     if (diagnosticsEnabled) {
         runDiagnostics();
-    }
-
-    // Check for updates every hour
-    static unsigned long lastUpdateCheck = 0;
-    if (millis() - lastUpdateCheck > 3600000) { // 1 hour
-        lastUpdateCheck = millis();
-        if (WiFiManager::isConnected()) {
-            OTAUpdateManager::checkForUpdates();
-        }
     }
 
     // Minimal loop - print a heartbeat every 10 seconds

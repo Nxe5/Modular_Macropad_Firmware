@@ -3,6 +3,10 @@
 #include <ArduinoJson.h>
 #include <USBCDC.h>
 #include <algorithm>
+#include <WiFi.h>
+#include "OTAUpdateManager.h"
+#include "VersionManager.h"
+#include "UpdateProgressDisplay.h"
 
 // Forward declaration - make this function available to other cpp files
 extern void setupConfigRoutes(AsyncWebServer *server);
@@ -387,6 +391,105 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   request->send(200, "application/json", output);
 }
 
+// OTA Update API handlers
+void handleCheckForUpdates(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/firmware/check");
+  
+  // Start the update check process
+  bool checkStarted = OTAUpdateManager::checkForUpdates();
+  
+  // Create response JSON
+  String response;
+  if (checkStarted) {
+    StaticJsonDocument<512> doc;
+    doc["status"] = "checking";
+    doc["message"] = "Checking for updates...";
+    serializeJson(doc, response);
+  } else {
+    StaticJsonDocument<512> doc;
+    doc["status"] = "error";
+    doc["message"] = "Failed to start update check: " + OTAUpdateManager::getLastError();
+    serializeJson(doc, response);
+  }
+  
+  // Send response
+  request->send(200, "application/json", response);
+}
+
+void handleGetUpdateStatus(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/firmware/status");
+  
+  // Create response JSON
+  StaticJsonDocument<1024> doc;
+  doc["status"] = OTAUpdateManager::getUpdateStatus();
+  doc["state"] = static_cast<int>(OTAUpdateManager::getUpdateState());
+  doc["progress"] = OTAUpdateManager::getUpdateProgress();
+  doc["updateAvailable"] = OTAUpdateManager::isUpdateAvailable();
+  
+  if (OTAUpdateManager::isUpdateAvailable()) {
+    doc["availableVersion"] = OTAUpdateManager::getAvailableVersion();
+    doc["releaseNotes"] = OTAUpdateManager::getReleaseNotes();
+    doc["currentVersion"] = VersionManager::getVersionString();
+  }
+  
+  if (OTAUpdateManager::getLastError().length() > 0) {
+    doc["error"] = OTAUpdateManager::getLastError();
+  }
+  
+  String response;
+  serializeJson(doc, response);
+  
+  // Send response
+  request->send(200, "application/json", response);
+}
+
+void handlePerformUpdate(AsyncWebServerRequest *request) {
+  USBSerial.println("API: Requested /api/firmware/update");
+  
+  // Check if update is available
+  if (!OTAUpdateManager::isUpdateAvailable()) {
+    request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"No update available\"}");
+    return;
+  }
+  
+  // Get the firmware URL
+  String firmwareUrl = OTAUpdateManager::getFirmwareUrl();
+  if (firmwareUrl.isEmpty()) {
+    request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"No firmware URL available\"}");
+    return;
+  }
+  
+  // Start the update process asynchronously (the actual update will happen after this response)
+  request->send(200, "application/json", "{\"status\":\"updating\",\"message\":\"Starting update process\"}");
+  
+  // Schedule the update to be performed after sending the response
+  // This is done because the update process will restart the device
+  static String pendingUpdateUrl = firmwareUrl;
+  USBSerial.println("Scheduling firmware update to: " + pendingUpdateUrl);
+  
+  // Use a task to perform the update after the response is sent
+  xTaskCreate([](void* parameter) {
+    String* updateUrl = (String*)parameter;
+    
+    // Short delay to ensure the HTTP response is sent
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
+    // Show update progress on display if available
+    UpdateProgressDisplay::drawProgressScreen("Firmware Update", 0, "Starting update...");
+    
+    // Set up a progress callback for display updates
+    auto progressCallback = [](size_t current, size_t total, int percentage) {
+      UpdateProgressDisplay::updateProgress(current, total, percentage);
+    };
+    
+    // Perform the update
+    OTAUpdateManager::performUpdate(*updateUrl, progressCallback);
+    
+    // This task should delete itself when done
+    vTaskDelete(NULL);
+  }, "update_task", 8192, &pendingUpdateUrl, 1, NULL);
+}
+
 void setupConfigRoutes(AsyncWebServer *server) {
   // Log when this function is called
   USBSerial.println("INFO: Setting up API config routes");
@@ -659,4 +762,40 @@ void setupConfigRoutes(AsyncWebServer *server) {
   });
   
   USBSerial.println("  - Registered debug raw data handlers");
+
+  // Register OTA update endpoints
+  server->on("/api/firmware/check", HTTP_GET, handleCheckForUpdates);
+  server->on("/api/firmware/status", HTTP_GET, handleGetUpdateStatus);
+  server->on("/api/firmware/update", HTTP_GET, handlePerformUpdate);
+  
+  USBSerial.println("  - Registered /api/firmware/check (GET)");
+  USBSerial.println("  - Registered /api/firmware/status (GET)");
+  USBSerial.println("  - Registered /api/firmware/update (GET)");
+  
+  // CORS preflight handlers for OTA endpoints
+  server->on("/api/firmware/check", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/firmware/status", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  server->on("/api/firmware/update", HTTP_OPTIONS, [](AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    request->send(response);
+  });
+  
+  USBSerial.println("  - Registered OTA update endpoints");
 } 
