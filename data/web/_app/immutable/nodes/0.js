@@ -1,1 +1,1 @@
-import{f as e,_ as n}from"../chunks/GF2OhrfO.js";export{e as component,n as universal};
+import{f as e,_ as n}from"../chunks/B1BLJCVR.js";export{e as component,n as universal};
