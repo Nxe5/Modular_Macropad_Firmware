@@ -374,7 +374,7 @@ void handleGetStatus(AsyncWebServerRequest *request) {
   
   DynamicJsonDocument doc(1024);
   doc["status"] = "ok";
-  doc["version"] = "1.0.0"; // Replace with actual version
+  doc["version"] = VersionManager::getVersionString();
   doc["uptime"] = millis() / 1000;
   doc["memory"]["free"] = ESP.getFreeHeap();
   doc["memory"]["total"] = ESP.getHeapSize();

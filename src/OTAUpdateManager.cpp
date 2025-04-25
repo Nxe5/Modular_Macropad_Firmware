@@ -50,6 +50,14 @@ void OTAUpdateManager::begin() {
 }
 
 bool OTAUpdateManager::checkForUpdates() {
+    // Check if WiFi is connected before proceeding
+    if (WiFi.status() != WL_CONNECTED) {
+        _lastError = "WiFi not connected. Please connect to a network first.";
+        _updateStatus = _lastError;
+        setUpdateState(FAILED);
+        return false;
+    }
+    
     setUpdateState(CHECKING);
     _updateProgress = 10;
     
@@ -57,10 +65,13 @@ bool OTAUpdateManager::checkForUpdates() {
     String url = String(GITHUB_API_URL) + "/repos/" + GITHUB_REPO_OWNER + "/" + GITHUB_REPO_NAME + "/releases/latest";
     http.begin(url);
     
+    // Add user agent to avoid GitHub API rate limiting
+    http.addHeader("User-Agent", "ESP32-ModularMacropad");
+    
     _updateStatus = "Checking for updates...";
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
-        _lastError = "Failed to check for updates. HTTP error: " + String(httpCode);
+        _lastError = "Failed to check for updates. HTTP error: " + String(httpCode) + ". Make sure WiFi is connected and stable.";
         _updateStatus = _lastError;
         setUpdateState(FAILED);
         http.end();
@@ -69,6 +80,10 @@ bool OTAUpdateManager::checkForUpdates() {
 
     String payload = http.getString();
     http.end();
+    
+    // Log some debug info
+    Serial.println("GitHub API response received: " + String(payload.length()) + " bytes");
+    Serial.println("First 100 chars: " + payload.substring(0, 100));
     
     _updateProgress = 30;
 
@@ -260,29 +275,52 @@ String OTAUpdateManager::getFirmwareUrl() {
 }
 
 bool OTAUpdateManager::parseGitHubRelease(const String& json) {
-    StaticJsonDocument<2048> doc;
+    // Increase buffer size to handle larger GitHub responses
+    DynamicJsonDocument doc(4096);
     DeserializationError error = deserializeJson(doc, json);
     
     if (error) {
         _lastError = "Failed to parse JSON: " + String(error.c_str());
+        Serial.println("JSON parse error: " + String(error.c_str()));
+        Serial.println("JSON sample: " + json.substring(0, 200));
         return false;
     }
 
-    _availableVersion = doc["tag_name"].as<String>();
-    _releaseNotes = doc["body"].as<String>();
+    // Check if we have a valid response with required fields
+    if (!doc.containsKey("tag_name") || !doc.containsKey("assets")) {
+        _lastError = "Invalid GitHub release format: missing required fields";
+        Serial.println("Invalid GitHub response: missing required fields");
+        return false;
+    }
+
+    // Extract version from tag_name, removing 'v' prefix if present
+    String tagName = doc["tag_name"].as<String>();
+    _availableVersion = tagName.startsWith("v") ? tagName.substring(1) : tagName;
+    
+    // Safely extract release notes
+    _releaseNotes = doc.containsKey("body") ? doc["body"].as<String>() : "No release notes available";
 
     // Find the firmware binary asset
+    bool foundBinary = false;
     JsonArray assets = doc["assets"];
     for (JsonObject asset : assets) {
+        if (!asset.containsKey("name") || !asset.containsKey("browser_download_url")) {
+            continue;
+        }
+        
         String name = asset["name"].as<String>();
         if (name.endsWith(".bin")) {
             _firmwareUrl = asset["browser_download_url"].as<String>();
+            foundBinary = true;
+            Serial.println("Found firmware binary: " + name);
+            Serial.println("Download URL: " + _firmwareUrl);
             break;
         }
     }
 
-    if (_firmwareUrl.isEmpty()) {
+    if (!foundBinary) {
         _lastError = "No firmware binary found in release";
+        Serial.println("No firmware binary found in release assets");
         return false;
     }
 
