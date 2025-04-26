@@ -759,73 +759,245 @@ String getLEDConfigJson() {
 
 // JSON utility function for updating LED configuration from JSON
 bool updateLEDConfigFromJson(const String& json) {
-    USBSerial.println("Updating LED config from JSON");
+    USBSerial.println("\n===== [updateLEDConfigFromJson] Starting LED config update =====");
+    
+    // Check if LED handler is initialized
+    if (!strip) {
+        USBSerial.println("[updateLEDConfigFromJson] ERROR: LED strip is not initialized (strip is NULL)");
+        return false;
+    }
+    
+    USBSerial.printf("[updateLEDConfigFromJson] LED strip initialized with %d LEDs\n", strip->numPixels());
+    
+    if (!ledConfigs) {
+        USBSerial.println("[updateLEDConfigFromJson] ERROR: ledConfigs array is NULL");
+        return false;
+    }
     
     // Debug before parsing
-    USBSerial.printf("JSON size: %d bytes\n", json.length());
-    USBSerial.printf("Free heap before parsing: %d bytes\n", ESP.getFreeHeap());
+    USBSerial.printf("[updateLEDConfigFromJson] JSON size: %d bytes\n", json.length());
+    USBSerial.printf("[updateLEDConfigFromJson] Free heap before parsing: %d bytes\n", ESP.getFreeHeap());
+    
+    // Dump first 100 characters of JSON for verification
+    if (json.length() > 0) {
+        USBSerial.println("[updateLEDConfigFromJson] JSON preview (first 100 chars): " + 
+                         json.substring(0, std::min(100, (int)json.length())));
+    }
     
     // Estimate buffer size
     size_t bufferSize = estimateJsonBufferSize(json, 1.5);
+    USBSerial.printf("[updateLEDConfigFromJson] Estimated buffer size: %d bytes\n", bufferSize);
     
     DynamicJsonDocument doc(bufferSize);
     DeserializationError error = deserializeJson(doc, json);
     
     // Debug after parsing
-    USBSerial.printf("Free heap after parsing: %d bytes\n", ESP.getFreeHeap());
+    USBSerial.printf("[updateLEDConfigFromJson] Free heap after parsing: %d bytes\n", ESP.getFreeHeap());
     
     if (error) {
-        USBSerial.printf("JSON parse error: %s\n", error.c_str());
+        USBSerial.printf("[updateLEDConfigFromJson] ERROR: JSON parse error: %s\n", error.c_str());
         
         if (error.code() == DeserializationError::NoMemory) {
-            USBSerial.printf("Memory allocation failed. Tried buffer size: %u bytes\n", bufferSize);
+            USBSerial.printf("[updateLEDConfigFromJson] Memory allocation failed. Tried buffer size: %u bytes\n", bufferSize);
             // Use estimation instead of measureJson
             size_t requiredSize = json.length() * 2; // Simple estimation
-            USBSerial.printf("Estimated required size: %u bytes\n", requiredSize);
+            USBSerial.printf("[updateLEDConfigFromJson] Estimated required size: %u bytes\n", requiredSize);
             
             // If we can measure and allocate the required size, retry
             if (requiredSize > 0 && requiredSize <= ESP.getFreeHeap() / 2) {
-                USBSerial.printf("Retrying with estimated size: %u bytes\n", requiredSize);
+                USBSerial.printf("[updateLEDConfigFromJson] Retrying with estimated size: %u bytes\n", requiredSize);
                 DynamicJsonDocument retryDoc(requiredSize);
                 error = deserializeJson(retryDoc, json);
                 
                 if (!error) {
+                    USBSerial.println("[updateLEDConfigFromJson] Retry parsing succeeded");
                     // Use this document instead
+                    
+                    // Check for expected structure
+                    if (!retryDoc.containsKey("leds")) {
+                        USBSerial.println("[updateLEDConfigFromJson] ERROR: JSON missing 'leds' key");
+                        return false;
+                    }
+                    
                     // Update global brightness if present
-                    if (retryDoc.containsKey("global_brightness") && strip) {
-                        uint8_t brightness = retryDoc["global_brightness"];
+                    if (retryDoc["leds"].containsKey("brightness")) {
+                        uint8_t brightness = retryDoc["leds"]["brightness"];
+                        USBSerial.printf("[updateLEDConfigFromJson] Setting global brightness to %d\n", brightness);
                         strip->setBrightness(brightness);
                     }
                     
-                    // Process LED configs
-                    if (retryDoc.containsKey("leds")) {
-                        JsonArray leds = retryDoc["leds"];
-                        for (JsonObject led : leds) {
-                            processLEDConfig(led);
+                    // Check for expected LED array
+                    bool usedLayersFormat = false;
+                    JsonArray ledsArray;
+                    
+                    // First check if we're using the layers format
+                    if (retryDoc["leds"].containsKey("layers") && retryDoc["leds"]["layers"].is<JsonArray>()) {
+                        USBSerial.println("[updateLEDConfigFromJson] Using layers format");
+                        usedLayersFormat = true;
+                        
+                        // Find the active layer
+                        JsonArray layers = retryDoc["leds"]["layers"];
+                        for (JsonObject layer : layers) {
+                            if (layer.containsKey("active") && layer["active"].as<bool>()) {
+                                if (layer.containsKey("layer-config") && layer["layer-config"].is<JsonArray>()) {
+                                    ledsArray = layer["layer-config"].as<JsonArray>();
+                                    USBSerial.printf("[updateLEDConfigFromJson] Found active layer with %d LEDs\n", ledsArray.size());
+                                    break;
+                                }
+                            }
                         }
-                        return true;
+                    } 
+                    // Then check for direct config array
+                    else if (retryDoc["leds"].containsKey("config") && retryDoc["leds"]["config"].is<JsonArray>()) {
+                        USBSerial.println("[updateLEDConfigFromJson] Using direct config format");
+                        ledsArray = retryDoc["leds"]["config"].as<JsonArray>();
+                        USBSerial.printf("[updateLEDConfigFromJson] Found LED config with %d LEDs\n", ledsArray.size());
                     }
+                    
+                    // Process LEDs if we found them
+                    if (ledsArray.size() > 0) {
+                        int processedCount = 0;
+                        for (JsonObject led : ledsArray) {
+                            if (led.containsKey("stream_address")) {
+                                uint8_t index = led["stream_address"];
+                                if (index < numLEDs) {
+                                    // Update color if present
+                                    if (led.containsKey("color")) {
+                                        ledConfigs[index].r = led["color"]["r"] | 0;
+                                        ledConfigs[index].g = led["color"]["g"] | 0;
+                                        ledConfigs[index].b = led["color"]["b"] | 0;
+                                    }
+                                    
+                                    // Update pressed color if present
+                                    if (led.containsKey("pressed_color")) {
+                                        ledConfigs[index].pressedR = led["pressed_color"]["r"] | 0;
+                                        ledConfigs[index].pressedG = led["pressed_color"]["g"] | 0;
+                                        ledConfigs[index].pressedB = led["pressed_color"]["b"] | 0;
+                                    }
+                                    
+                                    // Update brightness if present
+                                    if (led.containsKey("brightness")) {
+                                        ledConfigs[index].brightness = led["brightness"];
+                                    }
+                                    
+                                    // Update button ID if present
+                                    if (led.containsKey("button_id")) {
+                                        ledConfigs[index].buttonId = led["button_id"].as<String>();
+                                    }
+                                    
+                                    // Mark for update
+                                    ledConfigs[index].needsUpdate = true;
+                                    processedCount++;
+                                }
+                            }
+                        }
+                        
+                        USBSerial.printf("[updateLEDConfigFromJson] Successfully processed %d LEDs\n", processedCount);
+                        
+                        // Force an update of all LEDs
+                        updateLEDs();
+                        USBSerial.println("[updateLEDConfigFromJson] LED update completed successfully\n");
+                        return true;
+                    } else {
+                        USBSerial.println("[updateLEDConfigFromJson] ERROR: No LEDs found in the config");
+                        return false;
+                    }
+                } else {
+                    USBSerial.printf("[updateLEDConfigFromJson] ERROR: Retry parsing failed: %s\n", error.c_str());
                 }
             }
         }
         return false;
     }
     
+    // Check for expected structure
+    if (!doc.containsKey("leds")) {
+        USBSerial.println("[updateLEDConfigFromJson] ERROR: JSON missing 'leds' key");
+        return false;
+    }
+    
     // Update global brightness if present
-    if (doc.containsKey("global_brightness") && strip) {
-        uint8_t brightness = doc["global_brightness"];
+    if (doc["leds"].containsKey("brightness")) {
+        uint8_t brightness = doc["leds"]["brightness"];
+        USBSerial.printf("[updateLEDConfigFromJson] Setting global brightness to %d\n", brightness);
         strip->setBrightness(brightness);
     }
     
-    // Update LED configurations if present
-    if (doc.containsKey("leds")) {
-        JsonArray leds = doc["leds"];
-        for (JsonObject led : leds) {
-            processLEDConfig(led);
+    // Check for layers format first
+    bool usedLayersFormat = false;
+    JsonArray ledsArray;
+    
+    if (doc["leds"].containsKey("layers") && doc["leds"]["layers"].is<JsonArray>()) {
+        USBSerial.println("[updateLEDConfigFromJson] Using layers format");
+        usedLayersFormat = true;
+        
+        // Find the active layer
+        JsonArray layers = doc["leds"]["layers"];
+        for (JsonObject layer : layers) {
+            if (layer.containsKey("active") && layer["active"].as<bool>()) {
+                if (layer.containsKey("layer-config") && layer["layer-config"].is<JsonArray>()) {
+                    ledsArray = layer["layer-config"].as<JsonArray>();
+                    USBSerial.printf("[updateLEDConfigFromJson] Found active layer with %d LEDs\n", ledsArray.size());
+                    break;
+                }
+            }
         }
+    } 
+    // Then check for direct config array
+    else if (doc["leds"].containsKey("config") && doc["leds"]["config"].is<JsonArray>()) {
+        USBSerial.println("[updateLEDConfigFromJson] Using direct config format");
+        ledsArray = doc["leds"]["config"].as<JsonArray>();
+        USBSerial.printf("[updateLEDConfigFromJson] Found LED config with %d LEDs\n", ledsArray.size());
     }
     
-    return true;
+    // Process LEDs if we found them
+    if (ledsArray.size() > 0) {
+        int processedCount = 0;
+        for (JsonObject led : ledsArray) {
+            if (led.containsKey("stream_address")) {
+                uint8_t index = led["stream_address"];
+                if (index < numLEDs) {
+                    // Update color if present
+                    if (led.containsKey("color")) {
+                        ledConfigs[index].r = led["color"]["r"] | 0;
+                        ledConfigs[index].g = led["color"]["g"] | 0;
+                        ledConfigs[index].b = led["color"]["b"] | 0;
+                    }
+                    
+                    // Update pressed color if present
+                    if (led.containsKey("pressed_color")) {
+                        ledConfigs[index].pressedR = led["pressed_color"]["r"] | 0;
+                        ledConfigs[index].pressedG = led["pressed_color"]["g"] | 0;
+                        ledConfigs[index].pressedB = led["pressed_color"]["b"] | 0;
+                    }
+                    
+                    // Update brightness if present
+                    if (led.containsKey("brightness")) {
+                        ledConfigs[index].brightness = led["brightness"];
+                    }
+                    
+                    // Update button ID if present
+                    if (led.containsKey("button_id")) {
+                        ledConfigs[index].buttonId = led["button_id"].as<String>();
+                    }
+                    
+                    // Mark for update
+                    ledConfigs[index].needsUpdate = true;
+                    processedCount++;
+                }
+            }
+        }
+        
+        USBSerial.printf("[updateLEDConfigFromJson] Successfully processed %d LEDs\n", processedCount);
+        
+        // Force an update of all LEDs
+        updateLEDs();
+        USBSerial.println("[updateLEDConfigFromJson] LED update completed successfully\n");
+        return true;
+    }
+    
+    USBSerial.println("[updateLEDConfigFromJson] ERROR: No LEDs found in the config");
+    return false;
 }
 
 // Helper function to process a single LED config object

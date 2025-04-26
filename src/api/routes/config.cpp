@@ -7,10 +7,15 @@
 #include "OTAUpdateManager.h"
 #include "VersionManager.h"
 #include "UpdateProgressDisplay.h"
+#include "ConfigManager.h"
+#include "KeyHandler.h"
+#include "LEDHandler.h"
 
 // Forward declaration - make this function available to other cpp files
 extern void setupConfigRoutes(AsyncWebServer *server);
 extern USBCDC USBSerial; // Global serial reference
+extern KeyHandler* keyHandler; // Access to the key handler
+extern bool updateLEDConfigFromJson(const String& json); // Access to LED config update function
 
 // Define a smaller document size for safer memory usage
 const size_t JSON_DOCUMENT_SIZE = 8192;
@@ -178,26 +183,26 @@ void handlePostLedsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t 
   // Accumulate the data
   if (index == 0) {
     accumulatedData = ""; // Reset for new request
+    USBSerial.println("\n===== [LED CONFIG] Starting new LED config update =====");
   }
   accumulatedData += String((char*)data, len);
+  USBSerial.printf("[LED CONFIG] Accumulated %d/%d bytes of data\n", index + len, total);
   
   // Only process the complete data in the last chunk
   if (index + len < total) {
     return; // Wait for more data
   }
 
-  USBSerial.printf("Received complete LED config update, %d bytes\n", accumulatedData.length());
+  USBSerial.printf("[LED CONFIG] Received complete LED config update, %d bytes\n", accumulatedData.length());
   
-  // Log sample data for debugging
-  USBSerial.println("Sample of received data:");
-  for (size_t i = 0; i < std::min(size_t(100), accumulatedData.length()); i++) {
-    USBSerial.print(accumulatedData[i]);
-  }
-  USBSerial.println("\n---");
+  // Debugging: print memory status
+  USBSerial.printf("[LED CONFIG] Free heap: %d bytes\n", ESP.getFreeHeap());
   
   // Ensure the config directory exists
   if (!LittleFS.exists("/config")) {
+    USBSerial.println("[LED CONFIG] Config directory doesn't exist, creating it");
     if (!LittleFS.mkdir("/config")) {
+      USBSerial.println("[LED CONFIG] ERROR: Failed to create config directory");
       request->send(500, "application/json", "{\"error\":\"Failed to create config directory\"}");
       accumulatedData = ""; // Reset for next request
       return;
@@ -205,10 +210,11 @@ void handlePostLedsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t 
   }
 
   // Parse the JSON data
+  USBSerial.println("[LED CONFIG] Parsing JSON data");
   DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
   DeserializationError error = deserializeJson(doc, accumulatedData);
   if (error) {
-    USBSerial.printf("Invalid JSON in LED config: %s\n", error.c_str());
+    USBSerial.printf("[LED CONFIG] ERROR: Invalid JSON in LED config: %s\n", error.c_str());
     
     // Create properly formatted error message
     String errorMsg = "{\"error\":\"Invalid JSON in request body: ";
@@ -219,26 +225,102 @@ void handlePostLedsConfig(AsyncWebServerRequest *request, uint8_t *data, size_t 
     accumulatedData = ""; // Reset for next request
     return;
   }
+  USBSerial.println("[LED CONFIG] JSON parsing successful");
+
+  // Log some details about the LED config
+  USBSerial.println("[LED CONFIG] JSON structure overview:");
+  if (doc.containsKey("leds")) {
+    USBSerial.println("[LED CONFIG] - Contains 'leds' key");
+    if (doc["leds"].containsKey("pin")) {
+      USBSerial.printf("[LED CONFIG] - LED Pin: %d\n", doc["leds"]["pin"].as<int>());
+    }
+    if (doc["leds"].containsKey("brightness")) {
+      USBSerial.printf("[LED CONFIG] - Brightness: %d\n", doc["leds"]["brightness"].as<int>());
+    }
+    if (doc["leds"].containsKey("config") && doc["leds"]["config"].is<JsonArray>()) {
+      USBSerial.printf("[LED CONFIG] - LED count (config): %d\n", doc["leds"]["config"].size());
+    }
+    if (doc["leds"].containsKey("layers") && doc["leds"]["layers"].is<JsonArray>()) {
+      USBSerial.printf("[LED CONFIG] - Layer count: %d\n", doc["leds"]["layers"].size());
+    }
+  }
 
   // Write the config directly to file
+  USBSerial.println("[LED CONFIG] Opening file for writing: /config/leds.json");
   File file = LittleFS.open("/config/leds.json", "w");
   if (!file) {
+    USBSerial.println("[LED CONFIG] ERROR: Failed to open LEDs config file for writing");
     request->send(500, "application/json", "{\"error\":\"Failed to open LEDs config for writing\"}");
     accumulatedData = ""; // Reset for next request
     return;
   }
 
   // Serialize the updated config
+  USBSerial.println("[LED CONFIG] Serializing JSON to file");
   size_t serializedSize = serializeJson(doc, file);
   file.close();
   
   if (serializedSize == 0) {
+    USBSerial.println("[LED CONFIG] ERROR: Failed to write LED config - serialized size is 0");
     request->send(500, "application/json", "{\"error\":\"Failed to write LEDs config\"}");
     accumulatedData = ""; // Reset for next request
     return;
   }
 
-  USBSerial.printf("Successfully updated LEDs config (%d bytes)\n", serializedSize);
+  USBSerial.printf("[LED CONFIG] Successfully wrote %d bytes to file\n", serializedSize);
+  
+  // Verify the file was written correctly by reading it back
+  USBSerial.println("[LED CONFIG] Verifying file was written correctly");
+  file = LittleFS.open("/config/leds.json", "r");
+  if (!file) {
+    USBSerial.println("[LED CONFIG] ERROR: Could not open file for verification");
+  } else {
+    size_t fileSize = file.size();
+    USBSerial.printf("[LED CONFIG] File size after write: %d bytes\n", fileSize);
+    file.close();
+  }
+  
+  // Add a short delay before reloading configuration
+  USBSerial.println("[LED CONFIG] Waiting 1 second before applying LED configuration...");
+  delay(1000); // 1 second delay to ensure file operations are complete
+  
+  // IMPORTANT: Apply the new configuration to the in-memory LED state
+  USBSerial.println("[LED CONFIG] Applying configuration to in-memory state via updateLEDConfigFromJson()");
+  bool configApplied = updateLEDConfigFromJson(accumulatedData);
+  if (configApplied) {
+    USBSerial.println("[LED CONFIG] Successfully applied LED configuration to in-memory state");
+  } else {
+    USBSerial.println("[LED CONFIG] ERROR: Failed to apply LED configuration to in-memory state");
+    
+    // Try to diagnose why it failed
+    USBSerial.println("[LED CONFIG] Attempting to diagnose failure:");
+    
+    // Check if strip is initialized
+    extern Adafruit_NeoPixel* strip;
+    if (!strip) {
+      USBSerial.println("[LED CONFIG] - LED strip is not initialized (strip is NULL)");
+    } else {
+      USBSerial.printf("[LED CONFIG] - LED strip is initialized with %d LEDs\n", strip->numPixels());
+    }
+    
+    // Check if LEDHandler is accessible
+    extern LEDConfig* ledConfigs;
+    extern uint8_t numLEDs;
+    USBSerial.printf("[LED CONFIG] - numLEDs = %d\n", numLEDs);
+    if (!ledConfigs) {
+      USBSerial.println("[LED CONFIG] - ledConfigs array is NULL");
+    } else {
+      USBSerial.println("[LED CONFIG] - ledConfigs array is initialized");
+    }
+  }
+  
+  // Force an LED update
+  USBSerial.println("[LED CONFIG] Forcing LED update by calling updateLEDs()");
+  extern void updateLEDs();
+  updateLEDs();
+  
+  USBSerial.println("[LED CONFIG] LED configuration update complete\n");
+  
   request->send(200, "application/json", "{\"message\":\"LEDs config updated successfully\"}");
   accumulatedData = ""; // Reset for next request
 }
@@ -276,19 +358,26 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
   // Accumulate the data
   if (index == 0) {
     accumulatedData = ""; // Reset for new request
+    USBSerial.println("\n===== [ACTIONS CONFIG] Starting new actions config update =====");
   }
   accumulatedData += String((char*)data, len);
+  USBSerial.printf("[ACTIONS CONFIG] Accumulated %d/%d bytes of data\n", index + len, total);
   
   // Only process the complete data in the last chunk
   if (index + len < total) {
     return; // Wait for more data
   }
 
-  USBSerial.printf("Received complete actions config update, %d bytes\n", accumulatedData.length());
+  USBSerial.printf("[ACTIONS CONFIG] Received complete actions config update, %d bytes\n", accumulatedData.length());
+  
+  // Debugging: print memory status
+  USBSerial.printf("[ACTIONS CONFIG] Free heap: %d bytes\n", ESP.getFreeHeap());
   
   // Ensure the config directory exists
   if (!LittleFS.exists("/config")) {
+    USBSerial.println("[ACTIONS CONFIG] Config directory doesn't exist, creating it");
     if (!LittleFS.mkdir("/config")) {
+      USBSerial.println("[ACTIONS CONFIG] ERROR: Failed to create config directory");
       request->send(500, "application/json", "{\"error\":\"Failed to create config directory\"}");
       accumulatedData = ""; // Reset for next request
       return;
@@ -296,33 +385,114 @@ void handlePostActionsConfig(AsyncWebServerRequest *request, uint8_t *data, size
   }
   
   // Validate JSON data
+  USBSerial.println("[ACTIONS CONFIG] Parsing JSON data");
   DynamicJsonDocument doc(JSON_DOCUMENT_SIZE);
   DeserializationError error = deserializeJson(doc, accumulatedData);
   if (error) {
-    USBSerial.printf("Failed to parse actions JSON: %s\n", error.c_str());
+    USBSerial.printf("[ACTIONS CONFIG] ERROR: Failed to parse actions JSON: %s\n", error.c_str());
     request->send(400, "application/json", "{\"error\":\"Invalid JSON format in request\"}");
     accumulatedData = ""; // Reset for next request
     return;
   }
+  USBSerial.println("[ACTIONS CONFIG] JSON parsing successful");
+  
+  // Log some action configuration details
+  USBSerial.println("[ACTIONS CONFIG] JSON structure overview:");
+  if (doc.containsKey("layers") && doc["layers"].is<JsonObject>()) {
+    USBSerial.println("[ACTIONS CONFIG] - Contains 'layers' key as object");
+    int layerCount = 0;
+    for (JsonPair layer : doc["layers"].as<JsonObject>()) {
+      layerCount++;
+    }
+    USBSerial.printf("[ACTIONS CONFIG] - Found %d action layers\n", layerCount);
+  }
   
   // Write to file
+  USBSerial.println("[ACTIONS CONFIG] Opening file for writing: /config/actions.json");
   File file = LittleFS.open("/config/actions.json", "w");
   if (!file) {
+    USBSerial.println("[ACTIONS CONFIG] ERROR: Failed to open actions config file for writing");
     request->send(500, "application/json", "{\"error\":\"Failed to open actions config for writing\"}");
     accumulatedData = ""; // Reset for next request
     return;
   }
   
+  USBSerial.println("[ACTIONS CONFIG] Writing config to file");
   size_t bytesWritten = file.print(accumulatedData);
   file.close();
   
   if (bytesWritten != accumulatedData.length()) {
+    USBSerial.printf("[ACTIONS CONFIG] ERROR: Incomplete write - wrote %d of %d bytes\n", 
+                    bytesWritten, accumulatedData.length());
     request->send(500, "application/json", "{\"error\":\"Failed to write complete actions config\"}");
     accumulatedData = ""; // Reset for next request
     return;
   }
   
-  USBSerial.printf("Successfully saved actions config (%d bytes)\n", bytesWritten);
+  USBSerial.printf("[ACTIONS CONFIG] Successfully wrote %d bytes to file\n", bytesWritten);
+  
+  // Verify the file was written correctly by reading it back
+  USBSerial.println("[ACTIONS CONFIG] Verifying file was written correctly");
+  file = LittleFS.open("/config/actions.json", "r");
+  if (!file) {
+    USBSerial.println("[ACTIONS CONFIG] ERROR: Could not open file for verification");
+  } else {
+    size_t fileSize = file.size();
+    USBSerial.printf("[ACTIONS CONFIG] File size after write: %d bytes\n", fileSize);
+    file.close();
+  }
+  
+  // Add a short delay before reloading configuration
+  USBSerial.println("[ACTIONS CONFIG] Waiting 1 second before applying actions configuration...");
+  delay(1000); // 1 second delay to ensure file operations are complete
+  
+  // IMPORTANT: Reload and apply the new action configuration to in-memory state
+  if (keyHandler) {
+    USBSerial.println("[ACTIONS CONFIG] KeyHandler instance exists, proceeding with reload");
+    
+    // Load actions from the newly saved configuration file
+    USBSerial.println("[ACTIONS CONFIG] Loading actions from configuration file");
+    auto actions = ConfigManager::loadActions("/config/actions.json");
+    if (!actions.empty()) {
+      USBSerial.printf("[ACTIONS CONFIG] Successfully loaded %d actions\n", actions.size());
+      
+      // Update key configuration with new actions
+      USBSerial.println("[ACTIONS CONFIG] Calling keyHandler->loadKeyConfiguration()");
+      keyHandler->loadKeyConfiguration(actions);
+      
+      // Apply current layer to update the action map
+      String currentLayer = keyHandler->getCurrentLayer();
+      USBSerial.printf("[ACTIONS CONFIG] Current layer: %s\n", currentLayer.c_str());
+      USBSerial.println("[ACTIONS CONFIG] Calling keyHandler->applyLayerToActionMap()");
+      keyHandler->applyLayerToActionMap(currentLayer);
+      
+      USBSerial.printf("[ACTIONS CONFIG] Successfully applied actions to in-memory state (layer: %s)\n", 
+                     currentLayer.c_str());
+    } else {
+      USBSerial.println("[ACTIONS CONFIG] ERROR: Failed to load actions - returned empty collection");
+      
+      // Try to diagnose why it failed
+      USBSerial.println("[ACTIONS CONFIG] Diagnosing failure:");
+      file = LittleFS.open("/config/actions.json", "r");
+      if (!file) {
+        USBSerial.println("[ACTIONS CONFIG] - File doesn't exist after writing!");
+      } else {
+        USBSerial.printf("[ACTIONS CONFIG] - File exists, size: %d bytes\n", file.size());
+        
+        // Try to read a sample
+        if (file.size() > 0) {
+          String sample = file.readString().substring(0, 100);
+          USBSerial.println("[ACTIONS CONFIG] - File content (first 100 chars): " + sample);
+        }
+        file.close();
+      }
+    }
+  } else {
+    USBSerial.println("[ACTIONS CONFIG] ERROR: KeyHandler is NULL, cannot apply action configuration");
+  }
+  
+  USBSerial.println("[ACTIONS CONFIG] Actions configuration update complete\n");
+  
   request->send(200, "application/json", "{\"message\":\"Actions config updated successfully\"}");
   accumulatedData = ""; // Reset for next request
 }
